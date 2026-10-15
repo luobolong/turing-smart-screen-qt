@@ -1,0 +1,12 @@
+{
+  "values": {
+    "CpuLoad": 83, "CpuTemp": 36, "CpuFreq": 4800,
+    "GpuLoad": 81, "GpuTemp": 36, "GpuRam": 9277800448,
+    "RamLoad": 79, "RamValue": 34359738368,
+    "InternetUp": 81920, "InternetDown": 81920,
+    "Volume": 99, "HDDTemp": 39, "HDDLoad": 94
+  },
+  "strings": {"Time": "23:58", "Date": "2026/10/12"},
+  "readings": [], "networks": [], "disks": [], "gpu_names": [],
+  "timestamp": "reference", "weather": "", "errors": [], "fahrenheit": false
+}

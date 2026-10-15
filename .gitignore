@@ -1,0 +1,6 @@
+/build/
+/artifacts/
+/dist/
+/artifacts-*.txt
+CMakeUserPresets.json
+/.idea

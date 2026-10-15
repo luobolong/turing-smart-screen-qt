@@ -1,0 +1,649 @@
+{
+  "version": 1,
+  "name": "编辑示例工作区",
+  "landscape": true,
+  "background": null,
+  "overlay": null,
+  "text_background": null,
+  "use_text_background": false,
+  "groups": [
+    {
+      "root": false,
+      "name": "CPU",
+      "enabled": true,
+      "locked": false,
+      "x": 16,
+      "y": 42,
+      "background": null,
+      "items": [
+        {
+          "custom_label": true,
+          "graphic": {
+            "type": "shape",
+            "shape": "rectangle",
+            "width": 200,
+            "height": 132,
+            "fill": [
+              0,
+              0,
+              0,
+              0
+            ],
+            "stroke": [
+              49,
+              212,
+              194,
+              255
+            ],
+            "stroke_width": 2
+          },
+          "name": "StaticText",
+          "label": "Panel",
+          "enabled": true,
+          "locked": false,
+          "x": 0,
+          "y": 0,
+          "length": 0,
+          "long_text": true,
+          "text": "TURING SCREEN",
+          "font": {
+            "family": "Noto Sans SC",
+            "size": 18.0,
+            "color": [
+              240,
+              245,
+              255,
+              255
+            ],
+            "spacing": 0.0,
+            "width": 0,
+            "height": 0,
+            "offset_x": 0,
+            "offset_y": 0
+          }
+        },
+        {
+          "custom_label": true,
+          "graphic": null,
+          "name": "StaticText",
+          "label": "CPU",
+          "enabled": true,
+          "locked": false,
+          "x": 12,
+          "y": 12,
+          "length": 0,
+          "long_text": true,
+          "text": "CPU",
+          "font": {
+            "family": "GeForce",
+            "size": 18.0,
+            "color": [
+              240,
+              245,
+              255,
+              255
+            ],
+            "spacing": 11.0,
+            "width": 10,
+            "height": 13,
+            "offset_x": 5,
+            "offset_y": 8
+          }
+        },
+        {
+          "custom_label": true,
+          "graphic": null,
+          "name": "CpuLoad",
+          "label": "CpuLoad",
+          "enabled": true,
+          "locked": false,
+          "x": 88,
+          "y": 12,
+          "length": 0,
+          "long_text": true,
+          "text": "",
+          "font": {
+            "family": "GeForce",
+            "size": 18.0,
+            "color": [
+              240,
+              245,
+              255,
+              255
+            ],
+            "spacing": 11.0,
+            "width": 10,
+            "height": 13,
+            "offset_x": 5,
+            "offset_y": 8
+          }
+        },
+        {
+          "custom_label": true,
+          "graphic": null,
+          "name": "StaticText",
+          "label": "TEMP",
+          "enabled": true,
+          "locked": false,
+          "x": 12,
+          "y": 44,
+          "length": 0,
+          "long_text": true,
+          "text": "TEMP",
+          "font": {
+            "family": "GeForce",
+            "size": 18.0,
+            "color": [
+              240,
+              245,
+              255,
+              255
+            ],
+            "spacing": 11.0,
+            "width": 10,
+            "height": 13,
+            "offset_x": 5,
+            "offset_y": 8
+          }
+        },
+        {
+          "custom_label": true,
+          "graphic": null,
+          "name": "CpuTemp",
+          "label": "CpuTemp",
+          "enabled": true,
+          "locked": false,
+          "x": 88,
+          "y": 44,
+          "length": 0,
+          "long_text": true,
+          "text": "",
+          "font": {
+            "family": "GeForce",
+            "size": 18.0,
+            "color": [
+              240,
+              245,
+              255,
+              255
+            ],
+            "spacing": 11.0,
+            "width": 10,
+            "height": 13,
+            "offset_x": 5,
+            "offset_y": 8
+          }
+        },
+        {
+          "custom_label": true,
+          "graphic": null,
+          "name": "StaticText",
+          "label": "CLOCK",
+          "enabled": true,
+          "locked": false,
+          "x": 12,
+          "y": 76,
+          "length": 0,
+          "long_text": true,
+          "text": "CLOCK",
+          "font": {
+            "family": "GeForce",
+            "size": 18.0,
+            "color": [
+              240,
+              245,
+              255,
+              255
+            ],
+            "spacing": 11.0,
+            "width": 10,
+            "height": 13,
+            "offset_x": 5,
+            "offset_y": 8
+          }
+        },
+        {
+          "custom_label": true,
+          "graphic": null,
+          "name": "CpuFreq",
+          "label": "CpuFreq",
+          "enabled": true,
+          "locked": false,
+          "x": 88,
+          "y": 76,
+          "length": 0,
+          "long_text": true,
+          "text": "",
+          "font": {
+            "family": "GeForce",
+            "size": 18.0,
+            "color": [
+              240,
+              245,
+              255,
+              255
+            ],
+            "spacing": 11.0,
+            "width": 10,
+            "height": 13,
+            "offset_x": 5,
+            "offset_y": 8
+          }
+        }
+      ]
+    },
+    {
+      "root": false,
+      "name": "GPU",
+      "enabled": true,
+      "locked": false,
+      "x": 244,
+      "y": 42,
+      "background": null,
+      "items": [
+        {
+          "custom_label": true,
+          "graphic": {
+            "type": "shape",
+            "shape": "rectangle",
+            "width": 200,
+            "height": 132,
+            "fill": [
+              0,
+              0,
+              0,
+              0
+            ],
+            "stroke": [
+              49,
+              212,
+              194,
+              255
+            ],
+            "stroke_width": 2
+          },
+          "name": "StaticText",
+          "label": "Panel",
+          "enabled": true,
+          "locked": false,
+          "x": 0,
+          "y": 0,
+          "length": 0,
+          "long_text": true,
+          "text": "TURING SCREEN",
+          "font": {
+            "family": "Noto Sans SC",
+            "size": 18.0,
+            "color": [
+              240,
+              245,
+              255,
+              255
+            ],
+            "spacing": 0.0,
+            "width": 0,
+            "height": 0,
+            "offset_x": 0,
+            "offset_y": 0
+          }
+        },
+        {
+          "custom_label": true,
+          "graphic": null,
+          "name": "StaticText",
+          "label": "GPU",
+          "enabled": true,
+          "locked": false,
+          "x": 12,
+          "y": 12,
+          "length": 0,
+          "long_text": true,
+          "text": "GPU",
+          "font": {
+            "family": "GeForce",
+            "size": 18.0,
+            "color": [
+              240,
+              245,
+              255,
+              255
+            ],
+            "spacing": 11.0,
+            "width": 10,
+            "height": 13,
+            "offset_x": 5,
+            "offset_y": 8
+          }
+        },
+        {
+          "custom_label": true,
+          "graphic": null,
+          "name": "GpuLoad",
+          "label": "GpuLoad",
+          "enabled": true,
+          "locked": false,
+          "x": 88,
+          "y": 12,
+          "length": 0,
+          "long_text": true,
+          "text": "",
+          "font": {
+            "family": "GeForce",
+            "size": 18.0,
+            "color": [
+              240,
+              245,
+              255,
+              255
+            ],
+            "spacing": 11.0,
+            "width": 10,
+            "height": 13,
+            "offset_x": 5,
+            "offset_y": 8
+          }
+        },
+        {
+          "custom_label": true,
+          "graphic": null,
+          "name": "StaticText",
+          "label": "TEMP",
+          "enabled": true,
+          "locked": false,
+          "x": 12,
+          "y": 44,
+          "length": 0,
+          "long_text": true,
+          "text": "TEMP",
+          "font": {
+            "family": "GeForce",
+            "size": 18.0,
+            "color": [
+              240,
+              245,
+              255,
+              255
+            ],
+            "spacing": 11.0,
+            "width": 10,
+            "height": 13,
+            "offset_x": 5,
+            "offset_y": 8
+          }
+        },
+        {
+          "custom_label": true,
+          "graphic": null,
+          "name": "GpuTemp",
+          "label": "GpuTemp",
+          "enabled": true,
+          "locked": false,
+          "x": 88,
+          "y": 44,
+          "length": 0,
+          "long_text": true,
+          "text": "",
+          "font": {
+            "family": "GeForce",
+            "size": 18.0,
+            "color": [
+              240,
+              245,
+              255,
+              255
+            ],
+            "spacing": 11.0,
+            "width": 10,
+            "height": 13,
+            "offset_x": 5,
+            "offset_y": 8
+          }
+        },
+        {
+          "custom_label": true,
+          "graphic": null,
+          "name": "StaticText",
+          "label": "VRAM",
+          "enabled": true,
+          "locked": false,
+          "x": 12,
+          "y": 76,
+          "length": 0,
+          "long_text": true,
+          "text": "VRAM",
+          "font": {
+            "family": "GeForce",
+            "size": 18.0,
+            "color": [
+              240,
+              245,
+              255,
+              255
+            ],
+            "spacing": 11.0,
+            "width": 10,
+            "height": 13,
+            "offset_x": 5,
+            "offset_y": 8
+          }
+        },
+        {
+          "custom_label": true,
+          "graphic": null,
+          "name": "GpuRam",
+          "label": "GpuRam",
+          "enabled": true,
+          "locked": false,
+          "x": 88,
+          "y": 76,
+          "length": 0,
+          "long_text": true,
+          "text": "",
+          "font": {
+            "family": "GeForce",
+            "size": 18.0,
+            "color": [
+              240,
+              245,
+              255,
+              255
+            ],
+            "spacing": 11.0,
+            "width": 10,
+            "height": 13,
+            "offset_x": 5,
+            "offset_y": 8
+          }
+        }
+      ]
+    },
+    {
+      "root": true,
+      "name": "__root__",
+      "enabled": true,
+      "locked": false,
+      "x": 0,
+      "y": 0,
+      "background": null,
+      "items": [
+        {
+          "custom_label": true,
+          "graphic": null,
+          "name": "StaticText",
+          "label": "Dashboard title",
+          "enabled": true,
+          "locked": false,
+          "x": 18,
+          "y": 8,
+          "length": 0,
+          "long_text": true,
+          "text": "MY DASHBOARD",
+          "font": {
+            "family": "Noto Sans SC",
+            "size": 18.0,
+            "color": [
+              240,
+              245,
+              255,
+              255
+            ],
+            "spacing": 0.0,
+            "width": 0,
+            "height": 0,
+            "offset_x": 0,
+            "offset_y": 0
+          }
+        },
+        {
+          "custom_label": true,
+          "graphic": {
+            "type": "shape",
+            "shape": "rectangle",
+            "width": 150,
+            "height": 30,
+            "fill": [
+              49,
+              212,
+              194,
+              255
+            ],
+            "stroke": [
+              240,
+              245,
+              255,
+              255
+            ],
+            "stroke_width": 0
+          },
+          "name": "StaticText",
+          "label": "Accent",
+          "enabled": true,
+          "locked": false,
+          "x": 18,
+          "y": 220,
+          "length": 0,
+          "long_text": true,
+          "text": "",
+          "font": {
+            "family": "Noto Sans SC",
+            "size": 18.0,
+            "color": [
+              240,
+              245,
+              255,
+              255
+            ],
+            "spacing": 0.0,
+            "width": 0,
+            "height": 0,
+            "offset_x": 0,
+            "offset_y": 0
+          }
+        },
+        {
+          "custom_label": true,
+          "graphic": {
+            "type": "image",
+            "data": "iVBORw0KGgoAAAANSUhEUgAAAFAAAAAwCAYAAACG5f33AAABqElEQVR4Ae3AA6AkWZbG8f937o3IzKdyS2Oubdu2bdu2bdu2bWmMnpZKr54yMyLu+Xa3anqmhztr1a/CN7oABShAAQpQgAIUoAAFKEABClCAAhSgAAUoQAEKUIACFKAABShAAQpQgAIUoAAFKEABClCAAhSgAAUoQAEKUIACFKAABShAAQpQgAIUoAAFKEABClCAAhSgAAUoQAEKUIACFKAABShAAQpQgAJUOq76t6PScdW/HZWOq/7tqHRc9W9HpeOqfzsqHVf921HpuOrfjkrHVf92VDqu+rej0nHVvx2Vjqv+7ah0XPVvR6Xjqn87Kh1X/dtR6bjq345Kx1X/dlQ6rvq3o9Jx1b8dlY6r/u2odFz1b0el46p/OyodV/3bUem46t+OSsdV/3ZUOq76t6PScdW/HZWOq/7tqHRc9W9HpeOqfzsqHVf921HpuOrfjkrHVf92VDqu+rej0nHVvx2Vjqv+7ah0XPVvR6Xjqn87Kh1X/dtR6bjq345Kx1X/dlQ6rvq3o9Jx1b8dlY6r/u2odFz1b0el46p/OyodV/3bUem46t+OfwRGHgQuXtvo3AAAAABJRU5ErkJggg==",
+            "width": 80,
+            "height": 48,
+            "opacity": 100
+          },
+          "name": "StaticText",
+          "label": "Image",
+          "enabled": true,
+          "locked": false,
+          "x": 350,
+          "y": 220,
+          "length": 0,
+          "long_text": true,
+          "text": "",
+          "font": {
+            "family": "Noto Sans SC",
+            "size": 18.0,
+            "color": [
+              240,
+              245,
+              255,
+              255
+            ],
+            "spacing": 0.0,
+            "width": 0,
+            "height": 0,
+            "offset_x": 0,
+            "offset_y": 0
+          }
+        }
+      ]
+    }
+  ],
+  "bars": [
+    {
+      "label": "Progress",
+      "parent": 0,
+      "name": "CpuLoad",
+      "enabled": true,
+      "locked": false,
+      "x": 12,
+      "y": 114,
+      "length": 176,
+      "height": 6,
+      "step": 1,
+      "front": [
+        49,
+        212,
+        194,
+        255
+      ],
+      "back": [
+        37,
+        48,
+        65,
+        255
+      ],
+      "front_pixels": [],
+      "back_pixels": []
+    },
+    {
+      "label": "Progress",
+      "parent": 1,
+      "name": "GpuLoad",
+      "enabled": true,
+      "locked": false,
+      "x": 12,
+      "y": 114,
+      "length": 176,
+      "height": 6,
+      "step": 1,
+      "front": [
+        49,
+        212,
+        194,
+        255
+      ],
+      "back": [
+        37,
+        48,
+        65,
+        255
+      ],
+      "front_pixels": [],
+      "back_pixels": []
+    }
+  ],
+  "arcs": [],
+  "foreground": [
+    49,
+    212,
+    194,
+    255
+  ],
+  "back_color": [
+    37,
+    48,
+    65,
+    255
+  ],
+  "foreground_style": 0,
+  "background_style": 0
+}
