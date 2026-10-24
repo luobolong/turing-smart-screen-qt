@@ -3,6 +3,8 @@
 #include "device.h"
 #include "renderer.h"
 #include "sensors.h"
+#include "runtime.h"
+#include <memory>
 #include <QElapsedTimer>
 #include <QJsonObject>
 #include <QMainWindow>
@@ -25,21 +27,33 @@ class QTableWidget;
 class QStackedWidget;
 class QSplitter;
 class QToolBar;
+class QAction;
 namespace Screen {
 class MainWindow : public QMainWindow {
     Q_OBJECT
     friend class GuiTest;
+    friend class PerformanceProbe;
+    friend class ApplicationController;
+    std::shared_ptr<DisplayRuntime> runtime;
 
 public:
     explicit MainWindow(QString dataDir, QString themePath = {}, QWidget *parent = nullptr);
+    explicit MainWindow(std::shared_ptr<DisplayRuntime> runtime, QWidget *parent = nullptr);
     ~MainWindow() override;
-    Theme theme;
-    Snapshot sample;
+    Theme &theme;
+    Snapshot &sample;
     void runSmoke(const QString &dir, bool stress = false, int seconds = 60);
     QJsonObject diagnostics() const;
+signals:
+    void lightweightRequested();
+    void preferencesChanged();
+    void closedToTray();
+    void windowOpened();
 
 protected:
     void closeEvent(QCloseEvent *) override;
+    void showEvent(QShowEvent *) override;
+    void hideEvent(QHideEvent *) override;
 
 private:
     struct Entry {
@@ -53,21 +67,25 @@ private:
         QList<QJsonObject> undo, redo;
     };
     QString dataDir;
-    QJsonObject config, saved;
-    QString path;
-    bool english = false, editing = false, building = false, sending = false, quitting = false, dirty = false;
+    QJsonObject &config;
+    QJsonObject saved;
+    QString &path;
+    bool english = false, editing = false, building = false, quitting = false, dirty = false;
+    bool &sending;
+    std::function<bool()> trayAvailable = QSystemTrayIcon::isSystemTrayAvailable;
     int page = 0;
     QString paletteName = "graphite";
     QVector<Entry> entries;
     QHash<QString, Document> drafts;
     QList<QJsonObject> undoHistory, redoHistory;
     QJsonArray clipboard;
-    Renderer renderer;
-    Collector collector;
-    Device device;
-    QImage frame;
-    QTimer sampling, renderTimer;
-    QSystemTrayIcon *tray = nullptr;
+    Renderer &renderer;
+    QCache<QString, QPixmap> thumbnailCache{2 * 1024 * 1024};
+    Collector &collector;
+    Device &device;
+    QImage &frame;
+    QTimer &sampling;
+    QTimer renderTimer;
     QWidget *root = nullptr, *left = nullptr, *right = nullptr;
     QStackedWidget *pages = nullptr, *leftPages = nullptr;
     QListWidget *library = nullptr;
@@ -78,7 +96,8 @@ private:
     QLabel *title = nullptr, *resolution = nullptr, *connection = nullptr, *status = nullptr,
            *sendState = nullptr, *dataState = nullptr;
     QPushButton *modeButton = nullptr, *connectButton = nullptr, *sendButton = nullptr, *undoButton = nullptr,
-                *redoButton = nullptr;
+                *redoButton = nullptr, *deleteThemeButton = nullptr;
+    QAction *deleteThemeAction = nullptr;
     QComboBox *portBox = nullptr, *directionBox = nullptr, *bindingBox = nullptr;
     QSlider *brightness = nullptr;
     QLineEdit *layerName = nullptr, *layerText = nullptr;
@@ -97,8 +116,19 @@ private:
     void buildThemePage(QWidget *page);
     void buildSensors(QWidget *page);
     void buildSettings(QWidget *page);
+    void configureWeather();
     void buildDiagnostics(QWidget *page);
     void buildLibrary();
+    void reloadLibrary();
+    void updateThemeActions();
+    QString libraryKey(const QString &file) const;
+    bool hiddenTheme(const QString &file) const;
+    bool managedTheme(const QString &file) const;
+    bool builtinTheme(const QString &file) const;
+    void includeTheme(const QString &file);
+    void deleteTheme(const QString &file);
+    bool removeTheme(const QString &file, QString &error);
+    void restoreBuiltinThemes();
     void buildTree();
     void selectTree();
     void properties();
@@ -124,12 +154,16 @@ private:
     void redo();
     void render();
     void tick();
+    void refreshRuntimeUi();
     void updateStatus();
     void refreshPorts();
     void connectDevice();
     void toggleSend();
     void persist();
-    void makeTray();
+    QString orientationKey() const;
+    QString orientationKey(const QString &file) const;
+    void restoreThemeOrientation(bool migrateLegacy = false);
+    void applyThemeOrientation(int orientation);
     void quit();
     bool confirmDiscard();
     QStringList selection() const;

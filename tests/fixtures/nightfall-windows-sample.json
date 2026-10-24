@@ -1,0 +1,39 @@
+{
+  "timestamp": "2026-10-25T21:48:16+08:00",
+  "values": {
+    "CpuLoad": 32,
+    "CpuFreq": 5230,
+    "CpuTemp": 56,
+    "GpuLoad": 74,
+    "GpuTemp": 62,
+    "GpuFreq": 2380,
+    "GpuPower": 241,
+    "GpuFan": 1420,
+    "GpuRam": 8375186227,
+    "GpuRamTotal": 21474836480,
+    "RamLoad": 32,
+    "RamValue": 20723217203,
+    "RamTotal": 64854006170,
+    "InternetDown": 19503513,
+    "InternetUp": 817889,
+    "WeatherTemp": 23.5,
+    "GpuRamLoad": 39
+  },
+  "strings": {
+    "CpuModel": "AMD Ryzen 7 9800X3D 8-Core Processor",
+    "GpuModel": "AMD Radeon RX 7900 XT",
+    "RamUsage": "19.3 / 60.4 GB",
+    "Date": "2026/10/25",
+    "Weekday": "星期日",
+    "TimeSeconds": "21:48:16",
+    "GpuRamUsage": "7.8 / 20.0 GB",
+    "DateWeekday": "2026/10/25  Sun",
+    "OsName": "Windows 11 26H2",
+    "KernelVersion": "NT 10.0.26300.12345",
+    "WeatherCity": "Taipei",
+    "WeatherCondition": "Partly cloudy",
+    "WeatherIcon": "󰖕",
+    "LocalIp": "192.168.1.100",
+    "OsIcon": "󰖳"
+  }
+}

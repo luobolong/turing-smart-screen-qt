@@ -5,6 +5,7 @@
 #include <QImageReader>
 #include <QJsonDocument>
 #include <cmath>
+#include <cstring>
 #include <stdexcept>
 namespace Screen {
 QString screenFontFamily() {
@@ -13,6 +14,41 @@ QString screenFontFamily() {
         auto names = QFontDatabase::applicationFontFamilies(id);
         if (names.isEmpty())
             throw std::runtime_error("Missing application font");
+        return names.first();
+    }();
+    return family;
+}
+QString symbolFontFamily() {
+    static const QString family = [] {
+        const int id = QFontDatabase::addApplicationFont(assets() + "/fonts/TuringScreenSymbols.ttf");
+        const auto names = QFontDatabase::applicationFontFamilies(id);
+        if (names.isEmpty())
+            throw std::runtime_error("Missing theme symbol font");
+        return names.first();
+    }();
+    return family;
+}
+QString latinFontFamily() {
+    static const QString family = [] {
+        QString result;
+        for (const auto &style : {"Regular", "SemiBold"}) {
+            const auto file = assets() + "/fonts/TuringScreenLatin-" + style + ".ttf";
+            const auto id = QFontDatabase::addApplicationFont(file);
+            const auto names = QFontDatabase::applicationFontFamilies(id);
+            if (names.isEmpty())
+                throw std::runtime_error("Missing dashboard text font");
+            result = names.first();
+        }
+        return result;
+    }();
+    return family;
+}
+QString monoFontFamily() {
+    static const QString family = [] {
+        const int id = QFontDatabase::addApplicationFont(assets() + "/fonts/TuringScreenMono.ttf");
+        const auto names = QFontDatabase::applicationFontFamilies(id);
+        if (names.isEmpty())
+            throw std::runtime_error("Missing dashboard monospace font");
         return names.first();
     }();
     return family;
@@ -44,13 +80,30 @@ static void blend(QImage &out, int x, int y, QColor c) {
     p[2] = uchar((c.blue() * a + p[2] * (255 - a)) / 255);
 }
 static void image(QImage &out, const QImage &source, QPoint at) {
-    auto src =
-        source.format() == QImage::Format_RGBA8888 ? source : source.convertToFormat(QImage::Format_RGBA8888);
-    for (int y = qMax(0, -at.y()); y < qMin(src.height(), out.height() - at.y()); ++y) {
-        const auto *row = src.constScanLine(y);
-        for (int x = qMax(0, -at.x()); x < qMin(src.width(), out.width() - at.x()); ++x) {
-            const auto *p = row + 4 * x;
-            blend(out, at.x() + x, at.y() + y, QColor(p[0], p[1], p[2], p[3]));
+    const auto src = source.format() == QImage::Format_RGBA8888
+                         ? source : source.convertToFormat(QImage::Format_RGBA8888);
+    const int x0 = qMax(0, -at.x()), y0 = qMax(0, -at.y());
+    const int x1 = qMin(src.width(), out.width() - at.x()), y1 = qMin(src.height(), out.height() - at.y());
+    if (x0 >= x1 || y0 >= y1) return;
+    const auto *input = src.constBits();
+    auto *output = out.bits();
+    const auto inputStride = src.bytesPerLine(), outputStride = out.bytesPerLine();
+    for (int y = y0; y < y1; ++y) {
+        const auto *pixel = input + y * inputStride + x0 * 4;
+        auto *dest = output + (y + at.y()) * outputStride + (x0 + at.x()) * 4;
+        for (int x = x0; x < x1; ++x, pixel += 4, dest += 4) {
+            const quint32 a = pixel[3], d = dest[3];
+            if (a == 255 || d == 0) {
+                std::memcpy(dest, pixel, 4);
+            } else if (d < 255) {
+                const quint32 combined = a * 255 + d * (255 - a);
+                for (int channel = 0; channel < 3; ++channel)
+                    dest[channel] = uchar((pixel[channel] * a * 255 + dest[channel] * d * (255 - a)) / combined);
+                dest[3] = uchar(combined / 255);
+            } else {
+                for (int channel = 0; channel < 3; ++channel)
+                    dest[channel] = uchar((pixel[channel] * a + dest[channel] * (255 - a)) / 255);
+            }
         }
     }
 }
@@ -66,18 +119,18 @@ static QColor rgb565(const QByteArray &data, int offset, QColor fallback) {
 }
 Renderer::Renderer() {
     resourceTrace("renderer start");
+}
+void Renderer::clearCaches() {
+    images.clear();
+    glyphs.clear();
+    fontFamily.clear();
+}
+void Renderer::loadGlyphMetrics() {
+    if (!glyphs.isEmpty()) return;
     QFile f(assets() + "/fonts/geforce-metrics.json");
-    if (!f.open(QIODevice::ReadOnly))
-        throw std::runtime_error("Missing glyph metrics");
-    for (auto v : QJsonDocument::fromJson(f.readAll()).array()) {
-        auto m = v.toObject();
-        int size = m["size"].toInt();
-        glyphs.append({m,
-                       QImage(assets() + QString("/fonts/geforce-%1-fixed.png").arg(size))
-                           .convertToFormat(QImage::Format_Alpha8),
-                       QImage(assets() + QString("/fonts/geforce-%1-natural.png").arg(size))
-                           .convertToFormat(QImage::Format_Alpha8)});
-    }
+    if (!f.open(QIODevice::ReadOnly)) throw std::runtime_error("Missing glyph metrics");
+    for (const auto &value : QJsonDocument::fromJson(f.readAll()).array())
+        glyphs.append({value.toObject(), {}, {}});
 }
 QImage Renderer::decode(const QString &data) {
     if (data.isEmpty())
@@ -101,7 +154,7 @@ QImage Renderer::decode(const QString &data) {
 }
 QImage Renderer::render(const Theme &t, const Snapshot &s, bool example) {
     QImage out(t.size(), QImage::Format_RGBA8888);
-    out.fill(QColor(13, 20, 29));
+    out.fill(color(t.data["background_color"], QColor(13, 20, 29)));
     auto bg = decode(t.data["background"].toString());
     if (!bg.isNull()) {
         if (bg.size() != out.size())
@@ -114,6 +167,32 @@ QImage Renderer::render(const Theme &t, const Snapshot &s, bool example) {
         image(out, overlay, {});
     layers(out, t.layers(), s, {}, example);
     return out;
+}
+static QString sensorText(const QJsonObject &layer, const Snapshot &sample) {
+    const auto key = layer["metric"].toString();
+    const auto format = layer["value_format"].toObject();
+    const auto value = sample.values.constFind(canonical(key));
+    if (format.isEmpty() || value == sample.values.cend())
+        return sample.text(key, layer["length"].toInt() > 0);
+    double number = *value;
+    auto suffix = format["suffix"].toString();
+    if (format["auto_unit"] == "bytes/s") {
+        const QStringList units{"B/s", "KB/s", "MB/s", "GB/s", "TB/s"};
+        int unit = 0;
+        while (std::abs(number) >= 1024 && unit + 1 < units.size()) {
+            number /= 1024.;
+            ++unit;
+        }
+        suffix = ' ' + units[unit];
+    } else {
+        const auto divisor = format["divisor"].toDouble(1.);
+        if (!std::isfinite(divisor) || divisor <= 0)
+            return "--";
+        number /= divisor;
+    }
+    if (!std::isfinite(number))
+        return "--";
+    return QString::number(number, 'f', qBound(0, format["decimals"].toInt(), 6)) + suffix;
 }
 void Renderer::layers(QImage &out, const QJsonArray &a, const Snapshot &s, QPoint offset, bool example) {
     for (auto v : a) {
@@ -133,7 +212,7 @@ void Renderer::layers(QImage &out, const QJsonArray &a, const Snapshot &s, QPoin
             arc(out, l, at, s, example);
         else if (kind == "text" || kind == "sensor") {
             auto key = l["metric"].toString();
-            auto txt = kind == "text" ? l["text"].toString() : s.text(key, l["length"].toInt() > 0);
+            auto txt = kind == "text" ? l["text"].toString() : sensorText(l, s);
             if (example && kind == "sensor") {
                 txt = canonical(key) == "Time"      ? QString("23:58")
                       : canonical(key) == "CpuFreq" ? QString("4.8")
@@ -144,7 +223,24 @@ void Renderer::layers(QImage &out, const QJsonArray &a, const Snapshot &s, QPoin
             int length = l["length"].toInt();
             if (!l["long_text"].toBool(true) && length > 0)
                 txt = txt.rightJustified(length, ' ').right(length);
-            text(out, txt, at, l["font"].toObject(), l["long_text"].toBool(true));
+            auto font = l["font"].toObject();
+            if (kind == "sensor" && l.contains("missing_text") &&
+                !s.values.contains(canonical(key)) && !s.strings.contains(canonical(key)))
+                txt = l["missing_text"].toString();
+            if (l.contains("align") || l.contains("valign") || l.contains("baseline") || l["fit"].toBool() ||
+                l["shrink_to_fit"].toBool() ||
+                l["clip"].toBool() || l["elide"].toBool() || l["wrap"].toBool()) {
+                font["_box_width"] = l["w"];
+                font["_box_height"] = l["h"];
+                font["_align"] = l["align"];
+                font["_elide"] = l["elide"];
+                font["_wrap"] = l["wrap"];
+                font["_valign"] = l["valign"];
+                font["_fit"] = l["fit"];
+                font["_baseline"] = l["baseline"];
+                font["_shrink_to_fit"] = l["shrink_to_fit"];
+            }
+            text(out, txt, at, font, l["long_text"].toBool(true));
         } else if (kind == "image") {
             auto img = decode(l["data"].toString());
             if (!img.isNull()) {
@@ -172,6 +268,9 @@ void Renderer::layers(QImage &out, const QJsonArray &a, const Snapshot &s, QPoin
                 p.drawEllipse(r);
             else if (kind == "line")
                 p.drawLine(r.topLeft(), r.bottomRight());
+            else if (kind == "rectangle" && l["corner_radius"].toDouble() > 0)
+                p.drawRoundedRect(r.adjusted(sw / 2., sw / 2., -sw / 2., -sw / 2.),
+                                  l["corner_radius"].toDouble(), l["corner_radius"].toDouble());
             else
                 p.drawRect(r.adjusted(sw / 2., sw / 2., -sw / 2., -sw / 2.));
         }
@@ -181,7 +280,8 @@ void Renderer::text(QImage &out, const QString &str, QPoint at, const QJsonObjec
     int px = f["size"].toInt(18);
     QColor tint = color(f["color"]);
     bool official = f["family"] == "GeForce" || f["height"].toInt() > 0;
-    const Glyphs *g = nullptr;
+    Glyphs *g = nullptr;
+    if (official) loadGlyphMetrics();
     if (official)
         for (auto &v : glyphs)
             if (v.metrics["size"].toInt() == px) {
@@ -191,7 +291,11 @@ void Renderer::text(QImage &out, const QString &str, QPoint at, const QJsonObjec
     double cursor = at.x();
     if (g) {
         bool fixed = !longText && f["width"].toInt() > 0 && f["height"].toInt() > 0;
-        const auto &atlas = fixed ? g->fixed : g->natural;
+        auto &atlas = fixed ? g->fixed : g->natural;
+        if (atlas.isNull())
+            atlas = QImage(assets() + QString("/fonts/geforce-%1-%2.png").arg(px).arg(fixed ? "fixed" : "natural"))
+                        .convertToFormat(QImage::Format_Alpha8);
+        if (atlas.isNull()) throw std::runtime_error("Missing glyph atlas");
         int w = fixed ? g->metrics["width"].toInt() : 64, h = fixed ? g->metrics["height"].toInt() : 64;
         auto advances = g->metrics["advances"].toArray();
         int ox = fixed ? f["offset_x"].toInt() - g->metrics["offset_x"].toInt() : 0,
@@ -230,14 +334,18 @@ void Renderer::text(QImage &out, const QString &str, QPoint at, const QJsonObjec
         fontFamily = screenFontFamily();
     QPainter p(&out);
     p.setPen(tint);
-    QFont font(fontFamily);
+    const bool symbols = f["family"] == "Turing Screen Symbols";
+    QFont font(symbols ? symbolFontFamily()
+                      : f["family"] == "Turing Screen Latin" ? latinFontFamily()
+                      : f["family"] == "Turing Screen Mono" ? monoFontFamily() : fontFamily);
     font.setPixelSize(px);
+    font.setBold(f["bold"].toBool());
     font.setStyleStrategy(QFont::StyleStrategy(QFont::NoFontMerging | QFont::PreferAntialias));
     // Keep the common UI font small; load the complete CJK face only when a
     // user actually enters a character outside the shipped subset.
     QFontMetrics metrics(font);
     for (auto ch : str.left(1024)) {
-        if (!metrics.inFont(ch)) {
+        if (!symbols && !metrics.inFont(ch)) {
             static QString completeFamily = [] {
                 int id = QFontDatabase::addApplicationFont(assets() + "/fonts/NotoSansSC.ttf");
                 return QFontDatabase::applicationFontFamilies(id).value(0, screenFontFamily());
@@ -246,17 +354,80 @@ void Renderer::text(QImage &out, const QString &str, QPoint at, const QJsonObjec
             break;
         }
     }
+    const QFontMetricsF lineMetrics(font);
+    const int boxWidth = f["_box_width"].toInt();
+    if (boxWidth > 0 && f["_shrink_to_fit"].toBool()) {
+        // Keep the configured baseline while fitting long system names into
+        // their column; surrounding rows and the clock must not move.
+        for (int size = px; size > 6; --size) {
+            if (QFontMetricsF(font).horizontalAdvance(str.left(1024)) <= boxWidth)
+                break;
+            font.setPixelSize(size - 1);
+        }
+    }
     p.setFont(font);
     p.setRenderHint(QPainter::TextAntialiasing);
     QFontMetricsF fm(font);
+    QString display = str.left(1024);
+    const bool explicitBaseline = f["_baseline"].isDouble();
+    double baseline = at.y() + (explicitBaseline ? f["_baseline"].toDouble() : lineMetrics.ascent());
+    if (boxWidth > 0) {
+        const int boxHeight = qMax(1, f["_box_height"].toInt());
+        p.setClipRect(QRect(at, QSize(boxWidth, boxHeight)));
+        if (f["_fit"].toBool() && !display.isEmpty()) {
+            // Nerd Font glyphs can extend beyond the font's ascent and advance.
+            // Place the complete visible glyph inside its box before clipping.
+            const auto ink = fm.tightBoundingRect(display);
+            if (ink.isEmpty())
+                return;
+            const double scale = qMin(1., qMin(boxWidth / ink.width(), boxHeight / ink.height()));
+            const auto alignment = f["_align"].toString();
+            const auto vertical = f["_valign"].toString();
+            double x = at.x(), y = at.y();
+            if (alignment == "right")
+                x += boxWidth - ink.width() * scale;
+            else if (alignment == "center")
+                x += (boxWidth - ink.width() * scale) / 2.;
+            if (vertical == "bottom")
+                y += boxHeight - ink.height() * scale;
+            else if (vertical == "center")
+                y += (boxHeight - ink.height() * scale) / 2.;
+            p.translate(x - ink.left() * scale, y - ink.top() * scale);
+            p.scale(scale, scale);
+            p.drawText(QPointF(), display);
+            return;
+        }
+        if (f["_wrap"].toBool()) {
+            const auto alignment = f["_align"].toString();
+            const int flags = Qt::TextWordWrap | (alignment == "right" ? Qt::AlignRight
+                                                : alignment == "center" ? Qt::AlignHCenter : Qt::AlignLeft);
+            p.drawText(QRectF(at, QSizeF(boxWidth, f["_box_height"].toInt())), flags, display);
+            return;
+        }
+        if (f["_elide"].toBool())
+            display = fm.elidedText(display, Qt::ElideRight, boxWidth);
+        // Text alignment follows the font's line metrics, not the current
+        // string's ink bounds: descenders and changing digits must not move it.
+        if (!explicitBaseline) {
+            if (f["_valign"] == "bottom")
+                baseline = at.y() + boxHeight - lineMetrics.descent();
+            else if (f["_valign"] == "center")
+                baseline = at.y() + (boxHeight - lineMetrics.height()) / 2. + lineMetrics.ascent();
+        }
+        const auto alignment = f["_align"].toString();
+        if (alignment == "right")
+            cursor += boxWidth - fm.horizontalAdvance(display);
+        else if (alignment == "center")
+            cursor += (boxWidth - fm.horizontalAdvance(display)) / 2.;
+    }
     double spacing = f["spacing"].toDouble();
     if (spacing > 0) {
-        for (auto c : str.left(1024)) {
-            p.drawText(QPointF(cursor, at.y() + fm.ascent()), QString(c));
+        for (auto c : display) {
+            p.drawText(QPointF(cursor, baseline), QString(c));
             cursor += spacing;
         }
     } else
-        p.drawText(QPointF(at.x(), at.y() + fm.ascent()), str.left(1024));
+        p.drawText(QPointF(cursor, baseline), display);
 }
 void Renderer::bar(QImage &out, const QJsonObject &l, QPoint at, const Snapshot &s, bool example) {
     int w = qBound(1, l["w"].toInt(160), 1536), h = qBound(1, l["h"].toInt(10), 1536),
@@ -268,6 +439,19 @@ void Renderer::bar(QImage &out, const QJsonObject &l, QPoint at, const Snapshot 
     }
     int fill = int(std::round(w * s.percentage(l["metric"].toString()) / 100.)) / step * step;
     auto front = bytes(l, "front_pixels"), back = bytes(l, "back_pixels");
+    if (front.isEmpty() && back.isEmpty() && l["corner_radius"].toDouble() > 0) {
+        QPainter painter(&out);
+        painter.setRenderHint(QPainter::Antialiasing);
+        painter.setPen(Qt::NoPen);
+        const double radius = qMin(l["corner_radius"].toDouble(), h / 2.);
+        painter.setBrush(color(l["back"], QColor("#253041")));
+        painter.drawRoundedRect(QRectF(at, QSizeF(w, h)), radius, radius);
+        if (fill > 0) {
+            painter.setBrush(color(l["front"], QColor("#28c9bf")));
+            painter.drawRoundedRect(QRectF(at, QSizeF(qMin(fill, w), h)), radius, radius);
+        }
+        return;
+    }
     for (int x = 0; x < w; ++x)
         for (int y = 0; y < h; ++y) {
             int col = back.size() == h * 2 ? 0 : x;

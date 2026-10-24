@@ -1,0 +1,22 @@
+Turing Screen Symbols is a renamed subset generated from JetBrainsMono Nerd Font
+Regular, Nerd Fonts 3.5.0 / JetBrains Mono 2.304.
+
+Base font tables and space glyph:
+Copyright 2020 The JetBrains Mono Project Authors
+https://github.com/JetBrains/JetBrainsMono
+Nerd Fonts portions: Copyright (c) 2014 Ryan L McIntyre
+https://github.com/ryanoasis/nerd-fonts
+SIL Open Font License 1.1; see TuringScreenSymbols-OFL.txt.
+
+Selected icon outlines are Material Design Icons by Pictogrammers, Austin
+Andrews and contributors, distributed under Apache License 2.0.
+https://github.com/Templarian/MaterialDesign
+https://github.com/Templarian/MaterialDesign-Webfont
+See MaterialDesign-APACHE-2.0.txt.
+
+The NixOS logo glyph is from Font Logos (https://github.com/lukas-w/font-logos),
+released under the Unlicense; see FontLogos-UNLICENSE.txt.
+
+Changes: only the codepoints listed in scripts/generate-symbol-font.py are
+retained, hinting/layout data is removed, and the font family is renamed to
+Turing Screen Symbols. No system font installation is required.

@@ -30,6 +30,25 @@ static QLabel *label(const QString &text, QLayout *layout, const char *object = 
     layout->addWidget(l);
     return l;
 }
+static QString fileIdentity(const QString &file) {
+    const auto canonical = QFileInfo(file).canonicalFilePath();
+    return canonical.isEmpty() ? QFileInfo(file).absoluteFilePath() : canonical;
+}
+static bool withinDirectory(const QString &file, const QString &directory) {
+    if (file.isEmpty())
+        return false;
+    const auto relative = QDir(fileIdentity(directory)).relativeFilePath(fileIdentity(file));
+    return relative != "." && relative != ".." && !relative.startsWith("../") && !QDir::isAbsolutePath(relative);
+}
+static bool storeConfig(const QString &directory, const QJsonObject &config, QString &error) {
+    QSaveFile file(directory + "/config.json");
+    const auto bytes = QJsonDocument(config).toJson();
+    if (!file.open(QIODevice::WriteOnly) || file.write(bytes) != bytes.size() || !file.commit()) {
+        error = file.errorString();
+        return false;
+    }
+    return true;
+}
 class LayerTree : public QTreeWidget {
 public:
     std::function<void(QStringList, QString, int)> dropped;
@@ -65,51 +84,26 @@ protected:
     }
 };
 MainWindow::MainWindow(QString dir, QString initial, QWidget *parent)
-    : QMainWindow(parent), dataDir(std::move(dir)) {
+    : MainWindow(std::make_shared<DisplayRuntime>(std::move(dir), initial), parent) {}
+MainWindow::MainWindow(std::shared_ptr<DisplayRuntime> session, QWidget *parent)
+    : QMainWindow(parent), runtime(std::move(session)), theme(runtime->theme), sample(runtime->sample),
+      dataDir(runtime->dataDir), config(runtime->config), path(runtime->path), sending(runtime->sending),
+      renderer(runtime->renderer), collector(runtime->collector), device(runtime->device),
+      frame(runtime->frame), sampling(runtime->sampling) {
     resourceTrace("constructor body");
-    QDir().mkpath(dataDir + "/themes");
-    QFile f(dataDir + "/config.json");
-    if (f.open(QIODevice::ReadOnly))
-        config = QJsonDocument::fromJson(f.readAll()).object();
     english = config.value("language").toString("auto") == "english" ||
               (config.value("language").toString("auto") == "auto" &&
                QLocale::system().language() != QLocale::Chinese);
     paletteName = config.value("palette").toString("graphite");
-    theme = Theme::starter();
     saved = theme.data;
-    for (auto catalogRoot : {assets() + "/official/config", dataDir + "/themes"}) {
-        QDirIterator it(catalogRoot, {"*.data", "*.json"}, QDir::Files, QDirIterator::Subdirectories);
-        while (it.hasNext()) {
-            auto file = it.next();
-            if (file.endsWith("AppConfig.data"))
-                continue;
-            try {
-                auto t = Theme::load(file);
-                entries.append({file, t.name(), t.size()});
-            } catch (const std::exception &) {
-            }
-        }
-    }
+    reloadLibrary();
+    if (!path.isEmpty()) includeTheme(path);
     resourceTrace("catalog loaded");
-    std::sort(entries.begin(), entries.end(),
-              [](const Entry &a, const Entry &b) { return a.name.localeAwareCompare(b.name) < 0; });
-    initial = initial.isEmpty() ? config["selected_theme"].toString() : initial;
-    if (!initial.isEmpty())
-        try {
-            theme = Theme::load(initial);
-            path = initial;
-            saved = theme.data;
-        } catch (const std::exception &) {
-        }
-    connect(&sampling, &QTimer::timeout, this, &MainWindow::tick);
-    sampling.setTimerType(Qt::CoarseTimer);
-    sampling.start(qBound(1000, config.value("interval_ms").toInt(2000), 10000));
     renderTimer.setSingleShot(true);
     connect(&renderTimer, &QTimer::timeout, this, &MainWindow::render);
+    connect(runtime.get(), &DisplayRuntime::updated, this, &MainWindow::refreshRuntimeUi);
     build();
     resourceTrace("UI built");
-    makeTray();
-    sample = collector.collect(config["disk"].toString());
     render();
     resourceTrace("rendered");
     resize(1360, 900);
@@ -117,7 +111,17 @@ MainWindow::MainWindow(QString dir, QString initial, QWidget *parent)
     resourceClock.start();
 }
 MainWindow::~MainWindow() {
+    runtime->preview = false;
     persist();
+}
+void MainWindow::showEvent(QShowEvent *event) {
+    QMainWindow::showEvent(event);
+    runtime->preview = page == 0;
+    emit windowOpened();
+}
+void MainWindow::hideEvent(QHideEvent *event) {
+    QMainWindow::hideEvent(event);
+    runtime->preview = false;
 }
 void MainWindow::applyPalette() {
     bool light = paletteName == "light";
@@ -143,8 +147,8 @@ void MainWindow::applyPalette() {
     pal.setColor(QPalette::ToolTipBase, QColor(card));
     pal.setColor(QPalette::ToolTipText, QColor(text));
     pal.setColor(QPalette::Disabled, QPalette::Text, QColor(muted));
-    qApp->setPalette(pal);
-    qApp->setStyleSheet(
+    setPalette(pal);
+    setStyleSheet(
         QString(
             "QWidget{font-size:14px;color:%1;}QMainWindow,QWidget#root{background:%2;}QFrame#panel{"
             "background:%3;border:1px solid "
@@ -180,7 +184,7 @@ void MainWindow::build() {
     outer->setContentsMargins(12, 8, 12, 0);
     outer->setSpacing(8);
     auto header = new QHBoxLayout;
-    label("Turing Screen · Qt", header, "heading");
+    label("Turing Screen", header, "heading");
     header->addSpacing(24);
     navigation = new QTabBar;
     for (auto t :
@@ -230,7 +234,7 @@ void MainWindow::build() {
     connect(navigation, &QTabBar::currentChanged, this, &MainWindow::setPage);
     navigation->setCurrentIndex(page);
     pages->setCurrentIndex(page);
-    setWindowTitle(L("Turing Screen Qt · USB 副屏", "Turing Screen Qt · USB Display"));
+    setWindowTitle(L("图灵智显 · USB 副屏", "Turing Screen · USB Display"));
     for (auto a : findChildren<QAction *>("shortcut"))
         delete a;
     auto shortcut = [&](QKeySequence key, std::function<void()> fn) {
@@ -270,8 +274,7 @@ void MainWindow::build() {
     applyPalette();
     buildLibrary();
     buildTree();
-    if (tray)
-        makeTray();
+    emit preferencesChanged();
     building = false;
     setEditing(editing);
     updateStatus();
@@ -307,10 +310,13 @@ void MainWindow::buildThemePage(QWidget *w) {
     auto libraryButtons = new QHBoxLayout;
     button(L("＋ 新建", "+ New"), libraryButtons, [this] { newTheme(); });
     button(L("导入", "Import"), libraryButtons, [this] { importTheme(); });
+    deleteThemeButton = button(L("删除", "Delete"), libraryButtons, [this] { deleteTheme(path); });
+    deleteThemeButton->setObjectName("deleteThemeButton");
     ll->addLayout(libraryButtons);
     library = new QListWidget;
     library->setIconSize(QSize(88, 60));
     library->setUniformItemSizes(true);
+    library->setContextMenuPolicy(Qt::CustomContextMenu);
     ll->addWidget(library, 1);
     leftPages->addWidget(lib);
     connect(search, &QLineEdit::textChanged, this, [this](const QString &s) {
@@ -323,6 +329,17 @@ void MainWindow::buildThemePage(QWidget *w) {
             choose(item->data(Qt::UserRole).toString());
     });
     connect(library->verticalScrollBar(), &QScrollBar::valueChanged, this, [this] { thumbnails(); });
+    connect(library, &QListWidget::customContextMenuRequested, this, [this](QPoint position) {
+        QMenu menu(library);
+        if (const auto item = library->itemAt(position)) {
+            const auto file = item->data(Qt::UserRole).toString();
+            auto remove = menu.addAction(L("删除主题", "Delete theme"), this, [this, file] { deleteTheme(file); });
+            remove->setEnabled(!file.isEmpty());
+            menu.addSeparator();
+        }
+        menu.addAction(L("恢复内置主题", "Restore built-in themes"), this, &MainWindow::restoreBuiltinThemes);
+        menu.exec(library->viewport()->mapToGlobal(position));
+    });
     auto layers = new QWidget;
     auto llayers = new QVBoxLayout(layers);
     llayers->setContentsMargins(0, 0, 0, 0);
@@ -426,6 +443,9 @@ void MainWindow::buildThemePage(QWidget *w) {
         mutate([](Theme &t) { t.data["use_text_background"] = !t.data["use_text_background"].toBool(); });
     });
     themeMenu->addAction(L("另存为", "Save as"), this, [this] { saveTheme(true); });
+    themeMenu->addSeparator();
+    deleteThemeAction = themeMenu->addAction(L("删除主题", "Delete theme"), this, [this] { deleteTheme(path); });
+    themeMenu->addAction(L("恢复内置主题", "Restore built-in themes"), this, &MainWindow::restoreBuiltinThemes);
     sendButton = button({}, heading, [this] { toggleSend(); });
     sendButton->setObjectName("primary");
     cv->addLayout(heading);
@@ -450,6 +470,9 @@ void MainWindow::buildThemePage(QWidget *w) {
     auto scroll = new QScrollArea;
     scroll->setWidgetResizable(true);
     canvas = new Canvas;
+    canvas->setToolTip(L("拖动组合可整体移动；Alt+单击或双击可选择内部图层。也可在图层树中直接选择。",
+                         "Drag a group to move it together. Alt-click or double-click selects a child; "
+                         "individual layers can also be selected in the layer tree."));
     canvas->theme = &theme;
     scroll->setWidget(canvas);
     cv->addWidget(scroll, 1);
@@ -506,8 +529,11 @@ void MainWindow::buildThemePage(QWidget *w) {
     for (auto directionText : {L("竖屏", "Portrait"), L("反向竖屏", "Reverse portrait"),
                                L("横屏", "Landscape"), L("反向横屏", "Reverse landscape")})
         directionBox->addItem(directionText);
-    directionBox->setCurrentIndex(config.value("orientation").toInt(theme.size().width() > 320 ? 2 : 0));
-    form->addRow(L("方向", "Orientation"), directionBox);
+    directionBox->setCurrentIndex(theme.orientation());
+    directionBox->setToolTip(L("方向按主题自动保存，切换主题或重启后会恢复。保存主题 JSON 时也会携带方向。",
+                               "Orientation is remembered per theme across switches and restarts, "
+                               "and is included when saving the theme JSON."));
+    form->addRow(L("主题方向", "Theme orientation"), directionBox);
     brightness = new QSlider(Qt::Horizontal);
     brightness->setRange(0, 100);
     brightness->setValue(config.value("brightness").toInt(75));
@@ -517,8 +543,7 @@ void MainWindow::buildThemePage(QWidget *w) {
     form->addRow(mirrorBox);
     rv->addLayout(form);
     connect(directionBox, &QComboBox::currentIndexChanged, this, [this](int v) {
-        config["orientation"] = v;
-        device.command(4, v);
+        applyThemeOrientation(v);
         persist();
         render();
     });
@@ -655,12 +680,12 @@ void MainWindow::buildThemePage(QWidget *w) {
 void MainWindow::buildSensors(QWidget *w) {
     auto l = new QVBoxLayout(w);
     label(L("本机传感器", "Local sensors"), l, "heading");
-    label(L("默认每 2 秒采集。GPU、天气、外部硬件助手在 Qt 精简版中移除；无法获取的数据显示 --。",
-            "Samples every 2 seconds by default. GPU, weather and external hardware helpers are omitted; "
-            "unavailable values show --."),
+    label(L("默认每秒采集并更新副屏。内存已用、可用、总量以 GB 显示；无法读取的项目会在来源栏说明原因。",
+            "Samples and updates the display every second by default. Used, available and total RAM are shown in GB. "
+            "Unavailable sensors show a reason in the source column."),
           l, "muted");
     sensorTable = new QTableWidget(0, 3);
-    sensorTable->setHorizontalHeaderLabels({L("项目", "Metric"), L("数值", "Value"), L("来源", "Source")});
+    sensorTable->setHorizontalHeaderLabels({L("项目", "Metric"), L("数值", "Value"), L("来源 / 状态", "Source / status")});
     sensorTable->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
     sensorTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
     l->addWidget(sensorTable, 1);
@@ -704,8 +729,8 @@ void MainWindow::buildSettings(QWidget *w) {
     interval->setRange(1000, 10000);
     interval->setSingleStep(500);
     interval->setSuffix(" ms");
-    interval->setValue(config.value("interval_ms").toInt(2000));
-    form->addRow(L("采样间隔", "Sample interval"), interval);
+    interval->setValue(config.value("interval_ms").toInt(1000));
+    form->addRow(L("采集 / 发送间隔", "Sample / send interval"), interval);
     connect(interval, &QSpinBox::valueChanged, this, [this](int n) {
         config["interval_ms"] = n;
         sampling.setInterval(n);
@@ -718,6 +743,35 @@ void MainWindow::buildSettings(QWidget *w) {
         config["minimize_to_tray"] = v;
         persist();
     });
+    auto autoLightweight = new QCheckBox(L("关闭主窗口后自动进入轻量模式", "Enter lightweight mode after closing the window"));
+    autoLightweight->setObjectName("autoLightweight");
+    autoLightweight->setChecked(config["auto_lightweight"].toBool());
+    form->addRow(autoLightweight);
+    auto delay = new QSpinBox;
+    delay->setObjectName("lightweightDelay");
+    delay->setRange(1, 86400);
+    delay->setSuffix(" s");
+    delay->setValue(config.value("lightweight_delay_seconds").toInt(60));
+    delay->setEnabled(autoLightweight->isChecked());
+    form->addRow(L("进入轻量模式倒计时", "Lightweight countdown"), delay);
+    const auto updateLightweight = [this, autoLightweight, delay] {
+        config["auto_lightweight"] = autoLightweight->isChecked();
+        config["lightweight_delay_seconds"] = delay->value();
+        delay->setEnabled(autoLightweight->isChecked());
+        persist();
+        emit preferencesChanged();
+    };
+    connect(autoLightweight, &QCheckBox::toggled, this, updateLightweight);
+    connect(delay, &QSpinBox::valueChanged, this, updateLightweight);
+    auto enterLightweight = new QPushButton(L("立即进入轻量模式", "Enter lightweight mode now"));
+    enterLightweight->setObjectName("enterLightweight");
+    enterLightweight->setEnabled(QSystemTrayIcon::isSystemTrayAvailable());
+    connect(enterLightweight, &QPushButton::clicked, this, &MainWindow::lightweightRequested);
+    form->addRow(enterLightweight);
+    auto lightweightHint = new QLabel(L("关闭窗口后开始倒计时，重新打开取消。释放界面并继续推送；点击托盘图标恢复编辑。需要系统托盘。",
+        "Countdown starts when you close the window; reopening cancels it. Frees the interface while display updates continue. Restore from the system tray."));
+    lightweightHint->setWordWrap(true);
+    form->addRow(lightweightHint);
     auto disk = new QComboBox;
     disk->addItem(L("系统分区", "System drive"), QString());
     for (auto d : QStorageInfo::mountedVolumes())
@@ -729,10 +783,32 @@ void MainWindow::buildSettings(QWidget *w) {
         config["disk"] = disk->currentData().toString();
         persist();
     });
+    auto weatherEnabled = new QCheckBox(L("启用天气（每 10 分钟更新）", "Enable weather (updates every 10 minutes)"));
+    weatherEnabled->setObjectName("weatherEnabled");
+    const auto weatherOptions = theme.data.value("weather").toObject();
+    weatherEnabled->setChecked(config["weather_enabled"].toBool(weatherOptions["enabled"].toBool()));
+    form->addRow(weatherEnabled);
+    auto weatherCity = new QLineEdit(config["weather_city"].toString(weatherOptions["city"].toString()));
+    weatherCity->setObjectName("weatherCity");
+    weatherCity->setPlaceholderText(L("城市；留空按 IP 粗略定位", "City; leave empty for approximate IP location"));
+    form->addRow(L("天气城市", "Weather city"), weatherCity);
+    const auto applyWeather = [this, weatherEnabled, weatherCity] {
+        config["weather_enabled"] = weatherEnabled->isChecked();
+        config["weather_city"] = weatherCity->text().trimmed();
+        configureWeather();
+        persist();
+    };
+    connect(weatherEnabled, &QCheckBox::toggled, this, applyWeather);
+    connect(weatherCity, &QLineEdit::editingFinished, this, applyWeather);
+    auto weatherCredit = new QLabel(L("天气：<a href=\"https://open-meteo.com/\">Open-Meteo</a>（CC BY 4.0）。留空城市时使用 ipwho.is。",
+                                     "Weather: <a href=\"https://open-meteo.com/\">Open-Meteo</a> (CC BY 4.0). Empty city uses ipwho.is."));
+    weatherCredit->setOpenExternalLinks(true);
+    weatherCredit->setWordWrap(true);
+    form->addRow(weatherCredit);
     outer->addWidget(group);
-    label(L("Qt Widgets 原生界面，按需绘制；无浏览器、无动画循环。默认关闭在线服务和重型采集组件。",
-            "Native Qt Widgets with on-demand painting, no browser or animation loop. Online services and "
-            "heavy collectors are omitted."),
+    label(L("原生界面，按需绘制；无浏览器、无动画循环。天气可按需开启；音量异步采集。",
+            "Native interface with on-demand painting, no browser or animation loop. Weather is optional; "
+            "audio queries run asynchronously."),
           outer, "muted");
     outer->addStretch();
     auto buttons = new QHBoxLayout;
@@ -751,6 +827,22 @@ void MainWindow::buildSettings(QWidget *w) {
     });
     outer->addLayout(buttons);
 }
+void MainWindow::configureWeather() {
+    const auto options = theme.data.value("weather").toObject();
+    const bool enabled = config["weather_enabled"].toBool(options["enabled"].toBool());
+    const auto city = config["weather_city"].toString(options["city"].toString());
+    collector.setWeather(enabled, city);
+    if (root) {
+        if (const auto checkbox = root->findChild<QCheckBox *>("weatherEnabled")) {
+            QSignalBlocker blocker(checkbox);
+            checkbox->setChecked(enabled);
+        }
+        if (const auto field = root->findChild<QLineEdit *>("weatherCity")) {
+            QSignalBlocker blocker(field);
+            field->setText(city);
+        }
+    }
+}
 void MainWindow::buildDiagnostics(QWidget *w) {
     auto l = new QVBoxLayout(w);
     label(L("诊断", "Diagnostics"), l, "heading");
@@ -767,6 +859,7 @@ void MainWindow::buildDiagnostics(QWidget *w) {
 }
 void MainWindow::setPage(int n) {
     page = n;
+    runtime->preview = isVisible() && page == 0;
     pages->setCurrentIndex(n);
     if (n == 1)
         tick();
@@ -798,18 +891,255 @@ void MainWindow::buildLibrary() {
             library);
         i->setData(Qt::UserRole, path);
         i->setSizeHint(QSize(224, 76));
+        i->setHidden(search && !i->text().contains(search->text(), Qt::CaseInsensitive));
         if (path == this->path)
             i->setSelected(true);
     };
-    add({}, L("Qt 系统概览", "Qt overview"), QSize(480, 320));
+    add({}, L("系统概览", "System overview"), QSize(480, 320));
     for (auto e : entries)
         add(e.path, e.name, e.size);
+    updateThemeActions();
     QTimer::singleShot(0, this, &MainWindow::thumbnails);
+}
+QString MainWindow::libraryKey(const QString &file) const {
+    if (file.isEmpty())
+        return "__starter__";
+    if (builtinTheme(file))
+        return "builtin:" + QDir(fileIdentity(assets())).relativeFilePath(fileIdentity(file));
+    return fileIdentity(file);
+}
+bool MainWindow::builtinTheme(const QString &file) const {
+    return withinDirectory(file, assets());
+}
+bool MainWindow::managedTheme(const QString &file) const {
+    return !QFileInfo(file).isSymLink() && !builtinTheme(file) && withinDirectory(file, dataDir + "/themes");
+}
+bool MainWindow::hiddenTheme(const QString &file) const {
+    const auto key = libraryKey(file);
+    for (const auto &value : config["hidden_themes"].toArray())
+        if (value.toString() == key)
+            return true;
+    return false;
+}
+void MainWindow::reloadLibrary() {
+    entries.clear();
+    QFile indexFile(dataDir + "/catalog-index.json");
+    QJsonObject previous;
+    if (indexFile.open(QIODevice::ReadOnly)) {
+        const auto document = QJsonDocument::fromJson(indexFile.readAll()).object();
+        if (document["version"].toInt() == 1) previous = document["files"].toObject();
+    }
+    QJsonObject index;
+    QSet<QString> seen;
+    const auto add = [&](const QString &file) {
+        const auto key = libraryKey(file);
+        if (seen.contains(key) || hiddenTheme(file) || file.endsWith("AppConfig.data"))
+            return;
+        try {
+            const QFileInfo info(file);
+            auto cached = previous.value(file).toObject();
+            const auto modified = info.lastModified().toMSecsSinceEpoch();
+            if (cached["modified"].toDouble(-1) != modified || cached["bytes"].toDouble(-1) != info.size() ||
+                cached["name"].toString().isEmpty() || cached["width"].toInt() <= 0 || cached["height"].toInt() <= 0) {
+                const auto item = Theme::load(file);
+                cached = {{"modified", double(modified)}, {"bytes", double(info.size())},
+                          {"name", item.name()}, {"width", item.size().width()}, {"height", item.size().height()}};
+            }
+            index.insert(file, cached);
+            entries.append({file, cached["name"].toString(), QSize(cached["width"].toInt(), cached["height"].toInt())});
+            seen.insert(key);
+        } catch (const std::exception &) {
+        }
+    };
+    for (const auto &root : {assets() + "/themes", assets() + "/official/config", dataDir + "/themes"}) {
+        QDirIterator files(root, {"*.data", "*.json"}, QDir::Files, QDirIterator::Subdirectories);
+        while (files.hasNext())
+            add(files.next());
+    }
+    for (const auto &value : config["external_themes"].toArray())
+        add(value.toString());
+    if (index != previous) {
+        QSaveFile output(dataDir + "/catalog-index.json");
+        const auto bytes = QJsonDocument(QJsonObject{{"version", 1}, {"files", index}}).toJson(QJsonDocument::Compact);
+        if (output.open(QIODevice::WriteOnly) && output.write(bytes) == bytes.size()) output.commit();
+    }
+    std::sort(entries.begin(), entries.end(),
+              [](const Entry &a, const Entry &b) { return a.name.localeAwareCompare(b.name) < 0; });
+}
+void MainWindow::includeTheme(const QString &file) {
+    if (file.isEmpty())
+        return;
+    const auto key = libraryKey(file);
+    QJsonArray hidden;
+    for (const auto &value : config["hidden_themes"].toArray())
+        if (value.toString() != key)
+            hidden.append(value);
+    config["hidden_themes"] = hidden;
+    if (!builtinTheme(file) && !managedTheme(file)) {
+        auto external = config["external_themes"].toArray();
+        bool found = false;
+        for (const auto &value : external)
+            found |= libraryKey(value.toString()) == key;
+        if (!found)
+            external.append(QFileInfo(file).absoluteFilePath());
+        config["external_themes"] = external;
+    }
+    auto found = std::find_if(entries.begin(), entries.end(), [&](const Entry &e) { return libraryKey(e.path) == key; });
+    if (found == entries.end())
+        entries.prepend({file, theme.name(), theme.size()});
+    else {
+        found->name = theme.name();
+        found->size = theme.size();
+    }
+}
+void MainWindow::updateThemeActions() {
+    const bool available = !path.isEmpty();
+    if (deleteThemeButton) {
+        deleteThemeButton->setEnabled(available);
+        deleteThemeButton->setToolTip(available ? L("删除当前主题", "Delete current theme")
+                                                : L("系统概览保留为默认主题", "System overview is the default theme"));
+    }
+    if (deleteThemeAction)
+        deleteThemeAction->setEnabled(available);
+}
+void MainWindow::deleteTheme(const QString &file) {
+    if (file.isEmpty())
+        return;
+    const auto key = libraryKey(file);
+    QString name = QFileInfo(file).completeBaseName();
+    bool unsaved = libraryKey(path) == key && dirty;
+    for (const auto &entry : entries)
+        if (libraryKey(entry.path) == key)
+            name = entry.name;
+    for (auto i = drafts.cbegin(); i != drafts.cend(); ++i)
+        if (libraryKey(i->path) == key)
+            unsaved |= i->theme.data != i->saved;
+    auto effect = builtinTheme(file)
+        ? L("此内置主题将从主题库隐藏，可使用“恢复内置主题”重新显示。",
+            "This built-in theme will be hidden. Use Restore built-in themes to show it again.")
+        : managedTheme(file)
+        ? L("主题文件将移至数据目录的 deleted-themes 文件夹，可从该目录找回。",
+            "The theme file will be moved to deleted-themes in the data folder for recovery.")
+        : L("此主题将从主题库移除，原始文件保留在原位置。",
+            "This theme will be removed from the library; the original file is kept in its location.");
+    if (unsaved)
+        effect += L("\n此主题还有未保存的修改，删除将一并丢弃。",
+                    "\nThis theme has unsaved changes, which will also be discarded.");
+    QMessageBox confirmation(QMessageBox::Warning, L("删除主题", "Delete theme"),
+                             L("删除主题“%1”？\n\n", "Delete theme “%1”?\n\n").arg(name) + effect,
+                             QMessageBox::NoButton, this);
+    confirmation.setObjectName("deleteThemeConfirmation");
+    confirmation.addButton(L("删除", "Delete"), QMessageBox::DestructiveRole);
+    const auto cancel = confirmation.addButton(L("取消", "Cancel"), QMessageBox::RejectRole);
+    confirmation.setDefaultButton(cancel);
+    confirmation.setEscapeButton(cancel);
+    confirmation.exec();
+    if (!confirmation.clickedButton() || confirmation.buttonRole(confirmation.clickedButton()) != QMessageBox::DestructiveRole)
+        return;
+    QString error;
+    if (!removeTheme(file, error))
+        QMessageBox::warning(this, L("删除失败", "Delete failed"), error);
+}
+bool MainWindow::removeTheme(const QString &file, QString &error) {
+    error.clear();
+    if (file.isEmpty()) {
+        error = L("系统概览保留为默认主题。", "System overview is the default theme.");
+        return false;
+    }
+    const auto key = libraryKey(file);
+    const bool active = libraryKey(path) == key;
+    QStringList files, draftKeys, directionKeys;
+    for (const auto &entry : entries)
+        if (libraryKey(entry.path) == key)
+            files.append(entry.path);
+    if (active)
+        files.append(path);
+    if (files.isEmpty()) {
+        error = L("主题不在主题库中。", "The theme is not in the library.");
+        return false;
+    }
+    for (const auto &related : files)
+        directionKeys.append(orientationKey(related));
+    for (auto i = drafts.cbegin(); i != drafts.cend(); ++i)
+        if (libraryKey(i->path) == key)
+            draftKeys.append(i.key());
+    const bool personal = managedTheme(file);
+    QJsonArray external;
+    for (const auto &value : config["external_themes"].toArray())
+        if (libraryKey(value.toString()) != key)
+            external.append(value);
+    QString backup;
+    if (personal && QFileInfo::exists(file)) {
+        const auto directory = dataDir + "/deleted-themes";
+        if (!QDir().mkpath(directory)) {
+            error = L("无法创建已删除主题目录。", "Cannot create the deleted-themes folder.");
+            return false;
+        }
+        const auto info = QFileInfo(file);
+        backup = directory + '/' + uid() + '-' + info.completeBaseName().left(40) + '.' + info.suffix();
+        QFile source(file);
+        if (!source.rename(backup)) {
+            error = L("无法移动主题文件：", "Cannot move the theme file: ") + source.errorString();
+            return false;
+        }
+    }
+    auto nextConfig = config;
+    if (!personal) {
+        auto hidden = nextConfig["hidden_themes"].toArray();
+        if (!hidden.contains(key))
+            hidden.append(key);
+        nextConfig["hidden_themes"] = hidden;
+    }
+    nextConfig["external_themes"] = external;
+    auto directions = nextConfig["theme_orientations"].toObject();
+    for (const auto &direction : directionKeys)
+        directions.remove(direction);
+    nextConfig["theme_orientations"] = directions;
+    if (active) {
+        nextConfig["selected_theme"] = QString();
+        nextConfig["orientation"] = qBound(0, directions.value("__starter__").toInt(2), 3);
+    }
+    if (!storeConfig(dataDir, nextConfig, error)) {
+        error = L("无法保存主题库设置：", "Cannot save the theme library settings: ") + error;
+        if (!backup.isEmpty() && !QFile::rename(backup, file))
+            error += L("\n主题副本保留于：", "\nA copy of the theme is kept at: ") + backup;
+        return false;
+    }
+    config = nextConfig;
+    entries.erase(std::remove_if(entries.begin(), entries.end(), [&](const Entry &e) { return files.contains(e.path); }), entries.end());
+    if (active) {
+        sending = false;
+        choose({});
+    }
+    // Switching away stores a draft, so remove the deleted document afterwards.
+    for (const auto &related : files)
+        drafts.remove(related);
+    for (const auto &draft : draftKeys)
+        drafts.remove(draft);
+    buildLibrary();
+    return true;
+}
+void MainWindow::restoreBuiltinThemes() {
+    QJsonArray hidden;
+    for (const auto &value : config["hidden_themes"].toArray())
+        if (!value.toString().startsWith("builtin:"))
+            hidden.append(value);
+    auto restored = config;
+    restored["hidden_themes"] = hidden;
+    QString error;
+    if (!storeConfig(dataDir, restored, error)) {
+        QMessageBox::warning(this, L("恢复失败", "Restore failed"), error);
+        return;
+    }
+    config = restored;
+    reloadLibrary();
+    buildLibrary();
 }
 void MainWindow::thumbnails() {
     if (!library || page != 0 || !isVisible() || leftPages->currentIndex() != 0)
         return;
     int count = 0;
+    std::unique_ptr<Renderer> thumbnailRenderer;
     for (int n = 0; n < library->count() && count < 10; ++n) {
         auto i = library->item(n);
         if (i->isHidden() || !library->visualItemRect(i).intersects(library->viewport()->rect()) ||
@@ -817,9 +1147,19 @@ void MainWindow::thumbnails() {
             continue;
         try {
             auto file = i->data(Qt::UserRole).toString();
+            const QFileInfo info(file);
+            const auto key = file + ':' + QString::number(info.lastModified().toMSecsSinceEpoch()) + ':' + QString::number(info.size());
+            if (const auto cached = thumbnailCache.object(key)) {
+                i->setIcon(*cached);
+                ++count;
+                continue;
+            }
+            if (!thumbnailRenderer) thumbnailRenderer = std::make_unique<Renderer>();
             auto t = file.isEmpty() ? Theme::starter() : Theme::load(file);
-            i->setIcon(QPixmap::fromImage(
-                renderer.render(t, sample).scaled(88, 60, Qt::KeepAspectRatio, Qt::SmoothTransformation)));
+            const auto pixmap = QPixmap::fromImage(
+                thumbnailRenderer->render(t, sample).scaled(88, 60, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+            i->setIcon(pixmap);
+            thumbnailCache.insert(key, new QPixmap(pixmap), int(pixmap.width() * pixmap.height() * 4));
             ++count;
         } catch (const std::exception &) {
         }
@@ -936,7 +1276,9 @@ void MainWindow::propertyEdited() {
             auto f = l["font"].toObject();
             if (f["size"].toInt(20) != fontBox->value()) {
                 f["size"] = fontBox->value();
-                f["family"] = "Noto Sans SC";
+                if (f["family"] != "Turing Screen Symbols" && f["family"] != "Turing Screen Latin" &&
+                    f["family"] != "Turing Screen Mono")
+                    f["family"] = "Noto Sans SC";
                 f["height"] = 0;
                 f["width"] = 0;
                 f["spacing"] = 0;
@@ -1022,12 +1364,10 @@ void MainWindow::choose(const QString &file) {
         canvas->theme = &theme;
         selection({});
         config["selected_theme"] = path;
-        config["orientation"] = theme.size().width() > 320 ? 2 : 0;
-        {
-            QSignalBlocker b(directionBox);
-            directionBox->setCurrentIndex(config["orientation"].toInt());
-        }
-        device.command(4, config["orientation"].toInt());
+        restoreThemeOrientation();
+        configureWeather();
+        includeTheme(file);
+        updateThemeActions();
         persist();
         render();
     } catch (const std::exception &e) {
@@ -1053,17 +1393,17 @@ void MainWindow::importTheme() {
         QFileDialog::getOpenFileName(this, L("导入主题", "Import theme"), {}, "Themes (*.data *.json)");
     if (!file.isEmpty()) {
         choose(file);
-        if (!std::any_of(entries.begin(), entries.end(), [&](const Entry &e) { return e.path == file; }))
-            entries.prepend({file, theme.name(), theme.size()});
         buildLibrary();
     }
 }
 void MainWindow::saveTheme(bool as) {
     auto target = path;
-    if (as || target.isEmpty() || !theme.data.contains("format") || target.endsWith(".data"))
+    const bool builtin = QFileInfo(target).absoluteFilePath().startsWith(
+        QDir(assets() + "/themes").absolutePath() + '/');
+    if (as || builtin || target.isEmpty() || !theme.data.contains("format") || target.endsWith(".data"))
         target =
             QFileDialog::getSaveFileName(this, L("保存主题", "Save theme"),
-                                         dataDir + "/themes/" + theme.name() + ".json", "Qt theme (*.json)");
+                                         dataDir + "/themes/" + theme.name() + ".json", "Theme JSON (*.json)");
     if (target.isEmpty())
         return;
     try {
@@ -1072,15 +1412,7 @@ void MainWindow::saveTheme(bool as) {
         saved = theme.data;
         dirty = false;
         config["selected_theme"] = path;
-        bool found = false;
-        for (auto &entry : entries)
-            if (entry.path == path) {
-                entry.name = theme.name();
-                entry.size = theme.size();
-                found = true;
-            }
-        if (!found)
-            entries.prepend({path, theme.name(), theme.size()});
+        includeTheme(path);
         persist();
         buildLibrary();
         render();
@@ -1357,52 +1689,57 @@ void MainWindow::contextMenu(QPoint global) {
     m.exec(global);
 }
 void MainWindow::render() {
-    if (!canvas)
-        return;
-    try {
-        frame = renderer.render(theme, sample);
-        canvas->mirrored = config["mirror"].toBool();
-        canvas->setFrame(frame);
-        title->setText(theme.name() + (dirty ? " *" : ""));
-        resolution->setText(
-            QString("%1 × %2 · %3")
-                .arg(theme.size().width())
-                .arg(theme.size().height())
-                .arg(theme.size().width() > 320 ? L("横屏", "Landscape") : L("竖屏", "Portrait")));
-        if (sending && device.status().connected) {
-            QImage image = frame;
-            int dir = config.value("orientation").toInt(2);
-            if ((dir >= 2) != (image.width() > image.height()))
-                image = image.transformed(QTransform().rotate(90));
-            device.submit(image);
-        }
-        undoButton->setEnabled(!undoHistory.isEmpty());
-        redoButton->setEnabled(!redoHistory.isEmpty());
-        updateStatus();
-    } catch (const std::exception &e) {
-        if (status)
-            status->setText(QString::fromUtf8(e.what()));
-    }
+    runtime->render();
 }
 void MainWindow::tick() {
-    sample = collector.collect(config["disk"].toString());
-    if ((isVisible() && page == 0) || (sending && device.status().connected))
-        render();
-    else
-        updateStatus();
+    runtime->tick();
+}
+void MainWindow::refreshRuntimeUi() {
+    if (!frame.isNull()) {
+        canvas->mirrored = config["mirror"].toBool();
+        canvas->setFrame(frame);
+    }
+    title->setText(theme.name() + (dirty ? " *" : ""));
+    resolution->setText(QString("%1 × %2 · %3").arg(theme.size().width()).arg(theme.size().height())
+                           .arg(theme.size().width() > 320 ? L("横屏", "Landscape") : L("竖屏", "Portrait")));
+    undoButton->setEnabled(!undoHistory.isEmpty());
+    redoButton->setEnabled(!redoHistory.isEmpty());
+    updateStatus();
+    if (!runtime->error.isEmpty()) status->setText(runtime->error);
     if (page == 1 && isVisible()) {
-        auto m = metrics();
+        const auto &m = metrics();
         sensorTable->setRowCount(int(m.size()));
         for (int n = 0; n < m.size(); ++n) {
-            sensorTable->setItem(n, 0, new QTableWidgetItem(english ? m[n].first : m[n].second));
-            auto value = new QTableWidgetItem(sample.text(m[n].first));
+            const auto item = [&](int column) {
+                auto result = sensorTable->item(n, column);
+                if (!result) { result = new QTableWidgetItem; sensorTable->setItem(n, column, result); }
+                return result;
+            };
+            item(0)->setText(english ? m[n].first : m[n].second);
+            auto value = item(1);
+            value->setText(sample.text(m[n].first));
             value->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
-            sensorTable->setItem(n, 1, value);
-            sensorTable->setItem(
-                n, 2,
-                new QTableWidgetItem(sample.values.contains(m[n].first) || sample.strings.contains(m[n].first)
-                                         ? L("系统 API", "System API")
-                                         : "--"));
+            auto source = sample.sources.value(m[n].first);
+            if (source.isEmpty()) {
+                const auto reason = sample.unavailable.value(m[n].first);
+                if (reason.contains("permission"))
+                    source = L("接口不可读（权限或驱动限制）", "Counter not readable (permission or driver restriction)");
+                else if (reason.startsWith("Waiting for"))
+                    source = L("等待第二次采样", "Waiting for a second sample");
+                else if (reason.startsWith("Audio service"))
+                    source = L("音频服务连接中，或无默认输出", "Audio service connecting or no default output");
+                else if (reason.startsWith("Weather disabled"))
+                    source = L("天气未启用，可在设置中开启", "Weather disabled; enable in Settings");
+                else if (reason == "Weather loading")
+                    source = L("正在获取天气", "Loading weather");
+                else if (reason.startsWith("Driver does"))
+                    source = L("驱动未提供此传感器", "Driver does not expose this sensor");
+                else
+                    source = reason;
+            }
+            auto sourceItem = item(2);
+            sourceItem->setText(source);
+            sourceItem->setToolTip(sample.unavailable.value(m[n].first, source));
         }
     }
 }
@@ -1454,8 +1791,8 @@ void MainWindow::updateStatus() {
                                           : L("连接设备", "Connect device"));
     sendButton->setText(sending ? L("暂停发送", "Pause sending") : L("应用到副屏", "Send to display"));
     sendButton->setEnabled(s.connected);
-    for (auto widget : {static_cast<QWidget *>(brightness), static_cast<QWidget *>(directionBox),
-                        static_cast<QWidget *>(mirrorBox)}) {
+    directionBox->setEnabled(true);
+    for (auto widget : {static_cast<QWidget *>(brightness), static_cast<QWidget *>(mirrorBox)}) {
         widget->setEnabled(s.connected);
         widget->setToolTip(s.connected ? QString()
                                        : L("连接设备后可调整", "Available after connecting a device"));
@@ -1471,41 +1808,44 @@ void MainWindow::updateStatus() {
     status->setText(s.message);
 }
 void MainWindow::persist() {
-    config["selected_theme"] = path;
-    QSaveFile f(dataDir + "/config.json");
-    if (f.open(QIODevice::WriteOnly)) {
-        f.write(QJsonDocument(config).toJson());
-        f.commit();
-    }
+    runtime->persist();
 }
-void MainWindow::makeTray() {
-    if (tray) {
-        auto oldMenu = tray->contextMenu();
-        delete tray;
-        delete oldMenu;
+QString MainWindow::orientationKey() const {
+    return orientationKey(path);
+}
+QString MainWindow::orientationKey(const QString &file) const {
+    return themeOrientationKey(file);
+}
+void MainWindow::restoreThemeOrientation(bool migrateLegacy) {
+    auto preference = config["theme_orientations"].toObject().value(orientationKey());
+    const auto valid = [](QJsonValue v) {
+        return v.isDouble() && v.toInt(-1) >= 0 && v.toInt(-1) <= 3 && v.toDouble() == v.toInt();
+    };
+    if (!valid(preference) && migrateLegacy && !theme.data.contains("orientation"))
+        preference = config["orientation"];
+    applyThemeOrientation(valid(preference) ? preference.toInt() : theme.orientation());
+}
+void MainWindow::applyThemeOrientation(int direction) {
+    if (direction < 0 || direction > 3)
+        return;
+    // Orientation is an automatically persisted theme setting. Keep document
+    // history consistent so undoing an unrelated layer edit cannot revert it.
+    theme.data["orientation"] = direction;
+    saved["orientation"] = direction;
+    for (auto &state : undoHistory)
+        state["orientation"] = direction;
+    for (auto &state : redoHistory)
+        state["orientation"] = direction;
+    config["orientation"] = direction;
+    auto directions = config["theme_orientations"].toObject();
+    directions[orientationKey()] = direction;
+    config["theme_orientations"] = directions;
+    if (directionBox) {
+        QSignalBlocker blocker(directionBox);
+        directionBox->setCurrentIndex(direction);
     }
-    tray = new QSystemTrayIcon(style()->standardIcon(QStyle::SP_ComputerIcon), this);
-    tray->setToolTip("Turing Screen Qt");
-    auto menu = new QMenu(this);
-    menu->addAction(L("显示窗口", "Show window"), this, [this] {
-        showNormal();
-        raise();
-        activateWindow();
-        render();
-    });
-    menu->addAction(L("暂停 / 继续发送", "Pause / resume sending"), this, &MainWindow::toggleSend);
-    menu->addSeparator();
-    menu->addAction(L("退出", "Exit"), this, &MainWindow::quit);
-    tray->setContextMenu(menu);
-    connect(tray, &QSystemTrayIcon::activated, this, [this](QSystemTrayIcon::ActivationReason r) {
-        if (r == QSystemTrayIcon::DoubleClick) {
-            showNormal();
-            raise();
-            activateWindow();
-            render();
-        }
-    });
-    tray->show();
+    if (device.status().connected)
+        device.command(4, direction);
 }
 void MainWindow::quit() {
     if (!confirmDiscard())
@@ -1523,8 +1863,10 @@ bool MainWindow::confirmDiscard() {
                                                "Exit and discard all unsaved changes?")) == QMessageBox::Yes;
 }
 void MainWindow::closeEvent(QCloseEvent *e) {
-    if (!quitting && config["minimize_to_tray"].toBool() && QSystemTrayIcon::isSystemTrayAvailable()) {
+    if (!quitting && (config["minimize_to_tray"].toBool() || config["auto_lightweight"].toBool()) &&
+        trayAvailable()) {
         hide();
+        emit closedToTray();
         e->ignore();
         return;
     }
@@ -1540,9 +1882,9 @@ void MainWindow::closeEvent(QCloseEvent *e) {
 QJsonObject MainWindow::diagnostics() const {
     auto &d = const_cast<Device &>(device);
     auto s = d.status();
-    return {{"application", "Turing Screen Qt"},
+    return {{"application", "Turing Screen"},
             {"version", SCREEN_VERSION},
-            {"qt", qVersion()},
+            {"ui_runtime_version", qVersion()},
             {"platform", QSysInfo::prettyProductName()},
             {"configuration", config},
             {"snapshot", sample.json()},
@@ -1672,10 +2014,11 @@ void MainWindow::runSmoke(const QString &dir, bool stress, int seconds) {
             }
         }
         if (elapsed >= seconds) {
+            grab().save(dir + "/final.png");
             finishResources(dir, elapsed);
             QFile marker(dir + "/smoke-ok.txt");
             if (marker.open(QIODevice::WriteOnly))
-                marker.write("Qt C++ workload completed");
+                marker.write("Turing Screen workload completed");
             dirty = false;
             timer->stop();
             quit();

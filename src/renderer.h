@@ -6,11 +6,15 @@
 #include <QPainter>
 namespace Screen {
 QString screenFontFamily();
+QString symbolFontFamily();
+QString latinFontFamily();
+QString monoFontFamily();
 class Renderer {
 public:
     Renderer();
     QImage render(const Theme &theme, const Snapshot &sample, bool example = false);
     QImage decode(const QString &data);
+    void clearCaches();
     int cachedBytes() const {
         return images.totalCost();
     }
@@ -23,6 +27,7 @@ private:
     QVector<Glyphs> glyphs;
     QCache<QString, QImage> images{4 * 1024 * 1024};
     QString fontFamily;
+    void loadGlyphMetrics();
     void layers(QImage &out, const QJsonArray &a, const Snapshot &s, QPoint offset, bool example);
     void text(QImage &out, const QString &text, QPoint at, const QJsonObject &font, bool longText);
     void bar(QImage &out, const QJsonObject &l, QPoint at, const Snapshot &s, bool example);

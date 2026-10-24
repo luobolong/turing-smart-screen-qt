@@ -22,6 +22,9 @@ struct Theme {
     QSize size() const {
         return data.value("landscape").toBool(true) ? QSize(480, 320) : QSize(320, 480);
     }
+    int orientation() const {
+        return data.value("orientation").toInt(data.value("landscape").toBool(true) ? 2 : 0);
+    }
     QJsonArray layers() const {
         return data.value("layers").toArray();
     }
@@ -41,5 +44,5 @@ QJsonObject newLayer(const QString &kind, const QString &name, const QString &me
 QJsonObject component(const QString &kind);
 void regenerateIds(QJsonObject &layer);
 QString canonical(QString key);
-QVector<QPair<QString, QString>> metrics();
+const QVector<QPair<QString, QString>> &metrics();
 } // namespace Screen

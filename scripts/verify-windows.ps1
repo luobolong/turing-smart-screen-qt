@@ -11,7 +11,7 @@ try {
     }else{$env:PATH="$taskQt/bin;$env:PATH"}
     $taskOutput="artifacts/windows-$Name"
     New-Item -ItemType Directory -Path $taskOutput,"$taskOutput/data" -Force | Out-Null
-    @{language='chinese';interval_ms=2000;minimize_to_tray=$true} | ConvertTo-Json | Set-Content -Encoding Ascii "$taskOutput/data/config.json"
+    @{language='chinese';interval_ms=1000;minimize_to_tray=$true} | ConvertTo-Json | Set-Content -Encoding Ascii "$taskOutput/data/config.json"
     $taskMode=if($Stress){'--stress-test'}else{'--smoke-test'}
     Remove-Item -LiteralPath "$taskOutput/smoke-ok.txt" -ErrorAction SilentlyContinue
     $taskProcess=Start-Process -FilePath $Binary -ArgumentList $taskMode,$taskOutput,'--data-dir',"$taskOutput/data",'--test-seconds',$Seconds -WindowStyle Hidden -PassThru -RedirectStandardError "$taskOutput/stderr.txt"

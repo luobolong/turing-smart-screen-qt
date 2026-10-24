@@ -76,7 +76,7 @@ void Canvas::paintEvent(QPaintEvent *) {
         p.setPen(QPen(QColor("#388dff"), 1.4));
         p.setBrush(Qt::NoBrush);
         p.drawRect(b);
-        if (!layerLocked(theme->layers(), id)) {
+        if (!layerLocked(theme->layers(), id) && findLayer(theme->layers(), id)["kind"] != "group") {
             p.setBrush(Qt::white);
             for (auto pt : {b.topLeft(), b.topRight(), b.bottomLeft(), b.bottomRight()})
                 p.drawRect(QRectF(pt - QPointF(3, 3), QSizeF(6, 6)));
@@ -88,19 +88,38 @@ void Canvas::paintEvent(QPaintEvent *) {
         p.drawRect(QRectF(start, last).normalized());
     }
 }
-QString Canvas::hit(const QJsonArray &a, QPointF point, QPointF offset, bool visible) const {
+QString Canvas::hit(const QJsonArray &a, QPointF point, bool deep, QPointF offset) const {
     for (int n = int(a.size()) - 1; n >= 0; --n) {
         auto l = a[n].toObject();
-        if (!visible || !l["visible"].toBool(true))
+        if (!l["visible"].toBool(true))
             continue;
         auto at = offset + QPointF(l["x"].toDouble(), l["y"].toDouble());
-        auto child = hit(l["children"].toArray(), point, at, true);
+        auto child = hit(l["children"].toArray(), point, deep, at);
         if (!child.isEmpty())
-            return child;
-        if (l["kind"] != "group" && layerBounds(l).translated(at).contains(point))
+            return deep ? child : l["id"].toString();
+        if (layerBounds(l).translated(at).contains(point))
             return l["id"].toString();
     }
     return {};
+}
+QString Canvas::dragTarget(QPointF point, bool deep) const {
+    const auto layers = theme->layers();
+    const auto leaf = hit(layers, point, true);
+    if (deep)
+        return leaf;
+    // Keep an explicitly selected group (or a child selected in the layer tree)
+    // when pressing one of its descendants. Respect the topmost object at the pointer.
+    auto id = leaf;
+    while (!id.isEmpty()) {
+        if (selected.contains(id))
+            return id;
+        id = parentOf(layers, id);
+    }
+    return hit(layers, point);
+}
+bool Canvas::canResize() const {
+    return theme && selected.size() == 1 && !layerLocked(theme->layers(), selected.first()) &&
+           findLayer(theme->layers(), selected.first())["kind"] != "group";
 }
 void Canvas::mousePressEvent(QMouseEvent *e) {
     setFocus();
@@ -124,13 +143,13 @@ void Canvas::mousePressEvent(QMouseEvent *e) {
         update();
         return;
     }
-    if (selected.size() == 1 && !layerLocked(theme->layers(), selected.first()) &&
+    if (!(e->modifiers() & Qt::AltModifier) && canResize() &&
         QRectF(bounds(selected.first()).bottomRight() - QPointF(7, 7), QSizeF(14, 14)).contains(start)) {
         resizing = true;
         selectionBox = layerBounds(findLayer(theme->layers(), selected.first()));
         return;
     }
-    auto id = hit(theme->layers(), logical(start));
+    auto id = dragTarget(logical(start), e->modifiers() & Qt::AltModifier);
     if (!id.isEmpty()) {
         if (e->modifiers() & Qt::ControlModifier) {
             if (selected.contains(id))
@@ -153,7 +172,7 @@ void Canvas::mouseMoveEvent(QMouseEvent *e) {
         return;
     last = e->position();
     if (!(e->buttons() & Qt::LeftButton)) {
-        if (selected.size() == 1 &&
+        if (canResize() &&
             QRectF(bounds(selected.first()).bottomRight() - QPointF(6, 6), QSizeF(12, 12)).contains(last))
             setCursor(Qt::SizeFDiagCursor);
         else
@@ -174,8 +193,9 @@ void Canvas::mouseMoveEvent(QMouseEvent *e) {
                 f["size"] = qBound(
                     6, int(old["size"].toDouble(20) * l["h"].toDouble() / qMax(1., selectionBox.height())),
                     128);
-                l["font"] = f;
-                f["family"] = "Noto Sans SC";
+                if (f["family"] != "Turing Screen Symbols" && f["family"] != "Turing Screen Latin" &&
+                    f["family"] != "Turing Screen Mono")
+                    f["family"] = "Noto Sans SC";
                 f["height"] = 0;
                 f["width"] = 0;
                 f["spacing"] = 0;
@@ -219,10 +239,11 @@ void Canvas::mouseReleaseEvent(QMouseEvent *e) {
                     auto id = o["id"].toString();
                     if (!o["visible"].toBool(true))
                         continue;
-                    if (o["kind"] == "group")
+                    if (r.contains(bounds(id))) {
+                        if (!selected.contains(id))
+                            selected.append(id);
+                    } else if (o["kind"] == "group")
                         visit(o["children"].toArray());
-                    else if (o["visible"].toBool(true) && r.contains(bounds(id)) && !selected.contains(id))
-                        selected.append(id);
                 }
             };
             visit(theme->layers());
@@ -236,11 +257,11 @@ void Canvas::mouseReleaseEvent(QMouseEvent *e) {
 }
 void Canvas::mouseDoubleClickEvent(QMouseEvent *e) {
     if (editing && theme) {
-        auto id = hit(theme->layers(), logical(e->position()));
+        auto id = hit(theme->layers(), logical(e->position()), true);
         if (!id.isEmpty()) {
             selected = {id};
             emit selectionChanged();
-            emit contextRequested(e->globalPosition().toPoint());
+            update();
         }
     }
 }

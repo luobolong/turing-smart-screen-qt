@@ -42,7 +42,9 @@ private:
     QPointF start, last;
     QJsonObject before;
     QRectF selectionBox;
-    QString hit(const QJsonArray &, QPointF p, QPointF offset = {}, bool ancestorVisible = true) const;
+    QString hit(const QJsonArray &, QPointF p, bool deep = false, QPointF offset = {}) const;
+    QString dragTarget(QPointF point, bool deep) const;
+    bool canResize() const;
     QPointF logical(QPointF p) const;
     QRectF bounds(const QString &id) const;
 };

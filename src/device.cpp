@@ -77,6 +77,19 @@ QRect changed(const QImage &a, const QImage &b) {
     if (a.size() != b.size() || a.isNull())
         return b.rect();
     int x0 = b.width(), y0 = b.height(), x1 = -1, y1 = -1;
+    if (a.format() == QImage::Format_RGBA8888 && b.format() == a.format()) {
+        for (int y = 0; y < b.height(); ++y) {
+            const auto *left = reinterpret_cast<const quint32 *>(a.constScanLine(y));
+            const auto *right = reinterpret_cast<const quint32 *>(b.constScanLine(y));
+            if (std::memcmp(left, right, size_t(b.width()) * 4) == 0) continue;
+            for (int x = 0; x < b.width(); ++x) {
+                if (left[x] == right[x]) continue;
+                x0 = qMin(x, x0); x1 = qMax(x, x1);
+            }
+            y0 = qMin(y, y0); y1 = y;
+        }
+        return x1 < x0 ? QRect() : QRect(QPoint(x0, y0), QPoint(x1, y1));
+    }
     for (int y = 0; y < b.height(); ++y)
         for (int x = 0; x < b.width(); ++x)
             if (a.pixel(x, y) != b.pixel(x, y)) {

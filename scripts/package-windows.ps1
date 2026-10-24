@@ -16,6 +16,12 @@ try {
     New-Item -ItemType Directory -Path "$taskDestination/plugins/platforms","$taskDestination/plugins/imageformats" -Force | Out-Null
     Copy-Item -LiteralPath "$QtRoot/plugins/platforms/qwindows.dll","$QtRoot/plugins/platforms/qoffscreen.dll" -Destination "$taskDestination/plugins/platforms"
     Copy-Item -LiteralPath "$QtRoot/plugins/imageformats/qjpeg.dll" -Destination "$taskDestination/plugins/imageformats"
+    $taskSchannel=Join-Path $QtRoot 'plugins/tls/qschannelbackend.dll'
+    if(!(Test-Path -LiteralPath $taskSchannel)){throw 'Qt Schannel TLS plugin is required for weather HTTPS.'}
+    New-Item -ItemType Directory -Path "$taskDestination/plugins/tls" -Force | Out-Null
+    Copy-Item -LiteralPath $taskSchannel -Destination "$taskDestination/plugins/tls"
+    $taskNetworkPlugins=Join-Path $QtRoot 'plugins/networkinformation'
+    if(Test-Path -LiteralPath $taskNetworkPlugins){Copy-Item -LiteralPath $taskNetworkPlugins -Destination "$taskDestination/plugins" -Recurse}
     $taskCrt=Get-ChildItem -LiteralPath 'C:/Program Files (x86)/Microsoft Visual Studio/2022/BuildTools/VC/Redist/MSVC' -Directory | Where-Object {$_.Name -match '^14\.'} | Sort-Object Name -Descending | Select-Object -First 1
     Copy-Item -Path (Join-Path $taskCrt.FullName 'x64/Microsoft.VC143.CRT/*.dll') -Destination $taskDestination
     "[Paths]`nPrefix=.`nPlugins=plugins`n" | Set-Content -Encoding Ascii "$taskDestination/qt.conf"

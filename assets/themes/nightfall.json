@@ -1,0 +1,1687 @@
+{
+  "format": "turing-screen-qt",
+  "version": 1,
+  "name": "Nightfall",
+  "description": "Compact English dashboard with system, calendar and IP-based weather.",
+  "landscape": true,
+  "orientation": 2,
+  "background_color": [
+    11,
+    16,
+    24,
+    255
+  ],
+  "weather": {
+    "enabled": true,
+    "city": ""
+  },
+  "layers": [
+    {
+      "id": "nightfall-SYSTEM",
+      "kind": "group",
+      "name": "SYSTEM",
+      "x": 12,
+      "y": 15,
+      "w": 0,
+      "h": 0,
+      "visible": true,
+      "locked": false,
+      "children": [
+        {
+          "id": "nightfall-system-logo",
+          "kind": "sensor",
+          "name": "system-logo",
+          "x": 0,
+          "y": 2,
+          "w": 48,
+          "h": 48,
+          "visible": true,
+          "locked": false,
+          "metric": "OsIcon",
+          "text": "",
+          "align": "center",
+          "valign": "bottom",
+          "clip": true,
+          "elide": false,
+          "long_text": true,
+          "length": 0,
+          "font": {
+            "family": "Turing Screen Symbols",
+            "size": 48,
+            "color": [
+              126,
+              186,
+              228,
+              255
+            ],
+            "spacing": 0,
+            "bold": false
+          },
+          "fit": true,
+          "missing_text": ""
+        },
+        {
+          "id": "nightfall-system-version",
+          "kind": "sensor",
+          "name": "system-version",
+          "x": 56,
+          "y": 1,
+          "w": 98,
+          "h": 23,
+          "visible": true,
+          "locked": false,
+          "metric": "OsName",
+          "text": "",
+          "align": "left",
+          "valign": "bottom",
+          "clip": true,
+          "elide": true,
+          "long_text": true,
+          "length": 0,
+          "font": {
+            "family": "Turing Screen Latin",
+            "size": 15,
+            "color": [
+              162,
+              178,
+              198,
+              255
+            ],
+            "spacing": 0,
+            "bold": false
+          },
+          "baseline": 19,
+          "shrink_to_fit": true
+        },
+        {
+          "id": "nightfall-system-kernel",
+          "kind": "sensor",
+          "name": "system-kernel",
+          "x": 56,
+          "y": 34,
+          "w": 110,
+          "h": 20,
+          "visible": true,
+          "locked": false,
+          "metric": "KernelVersion",
+          "text": "",
+          "align": "left",
+          "valign": "bottom",
+          "clip": true,
+          "elide": true,
+          "long_text": true,
+          "length": 0,
+          "font": {
+            "family": "Turing Screen Latin",
+            "size": 12,
+            "color": [
+              162,
+              178,
+              198,
+              255
+            ],
+            "spacing": 0,
+            "bold": false
+          },
+          "baseline": 16,
+          "shrink_to_fit": true
+        }
+      ]
+    },
+    {
+      "id": "nightfall-CLOCK",
+      "kind": "group",
+      "name": "CLOCK",
+      "x": 166,
+      "y": 7,
+      "w": 0,
+      "h": 0,
+      "visible": true,
+      "locked": false,
+      "children": [
+        {
+          "id": "nightfall-clock-time",
+          "kind": "sensor",
+          "name": "clock-time",
+          "x": 0,
+          "y": 1,
+          "w": 148,
+          "h": 38,
+          "visible": true,
+          "locked": false,
+          "metric": "TimeSeconds",
+          "text": "",
+          "align": "center",
+          "valign": "bottom",
+          "clip": true,
+          "elide": true,
+          "long_text": true,
+          "length": 0,
+          "font": {
+            "family": "Turing Screen Mono",
+            "size": 30,
+            "color": [
+              242,
+              245,
+              250,
+              255
+            ],
+            "spacing": 0,
+            "bold": true
+          },
+          "baseline": 34
+        },
+        {
+          "id": "nightfall-clock-calendar",
+          "kind": "sensor",
+          "name": "clock-calendar",
+          "x": 0,
+          "y": 42,
+          "w": 148,
+          "h": 20,
+          "visible": true,
+          "locked": false,
+          "metric": "DateWeekday",
+          "text": "",
+          "align": "center",
+          "valign": "bottom",
+          "clip": true,
+          "elide": true,
+          "long_text": true,
+          "length": 0,
+          "font": {
+            "family": "Turing Screen Latin",
+            "size": 12,
+            "color": [
+              162,
+              178,
+              198,
+              255
+            ],
+            "spacing": 0,
+            "bold": false
+          },
+          "baseline": 16
+        }
+      ]
+    },
+    {
+      "id": "nightfall-WEATHER",
+      "kind": "group",
+      "name": "WEATHER",
+      "x": 318,
+      "y": 4,
+      "w": 0,
+      "h": 0,
+      "visible": true,
+      "locked": false,
+      "children": [
+        {
+          "id": "nightfall-weather-icon",
+          "kind": "sensor",
+          "name": "weather-icon",
+          "x": 32,
+          "y": 14,
+          "w": 30,
+          "h": 30,
+          "visible": true,
+          "locked": false,
+          "metric": "WeatherIcon",
+          "text": "",
+          "align": "left",
+          "valign": "bottom",
+          "clip": true,
+          "elide": false,
+          "long_text": true,
+          "length": 0,
+          "font": {
+            "family": "Turing Screen Symbols",
+            "size": 30,
+            "color": [
+              201,
+              210,
+              243,
+              255
+            ],
+            "spacing": 0,
+            "bold": false
+          },
+          "fit": true,
+          "missing_text": ""
+        },
+        {
+          "id": "nightfall-weather-temperature",
+          "kind": "sensor",
+          "name": "weather-temperature",
+          "x": 56,
+          "y": 12,
+          "w": 94,
+          "h": 36,
+          "visible": true,
+          "locked": false,
+          "metric": "WeatherTemp",
+          "text": "",
+          "align": "right",
+          "valign": "bottom",
+          "clip": true,
+          "elide": true,
+          "long_text": true,
+          "length": 0,
+          "font": {
+            "family": "Turing Screen Latin",
+            "size": 28,
+            "color": [
+              201,
+              210,
+              243,
+              255
+            ],
+            "spacing": 0,
+            "bold": true
+          },
+          "baseline": 32,
+          "value_format": {
+            "decimals": 0,
+            "suffix": "°C"
+          }
+        },
+        {
+          "id": "nightfall-weather-condition",
+          "kind": "sensor",
+          "name": "weather-condition",
+          "x": 32,
+          "y": 46,
+          "w": 54,
+          "h": 19,
+          "visible": true,
+          "locked": false,
+          "metric": "WeatherCondition",
+          "text": "",
+          "align": "left",
+          "valign": "bottom",
+          "clip": true,
+          "elide": true,
+          "long_text": true,
+          "length": 0,
+          "font": {
+            "family": "Turing Screen Latin",
+            "size": 11,
+            "color": [
+              201,
+              210,
+              243,
+              255
+            ],
+            "spacing": 0,
+            "bold": false
+          },
+          "baseline": 15
+        },
+        {
+          "id": "nightfall-weather-city",
+          "kind": "sensor",
+          "name": "weather-city",
+          "x": 86,
+          "y": 46,
+          "w": 64,
+          "h": 19,
+          "visible": true,
+          "locked": false,
+          "metric": "WeatherCity",
+          "text": "",
+          "align": "right",
+          "valign": "bottom",
+          "clip": true,
+          "elide": true,
+          "long_text": true,
+          "length": 0,
+          "font": {
+            "family": "Turing Screen Latin",
+            "size": 11,
+            "color": [
+              201,
+              210,
+              243,
+              255
+            ],
+            "spacing": 0,
+            "bold": false
+          },
+          "baseline": 15
+        }
+      ]
+    },
+    {
+      "id": "nightfall-CPU",
+      "kind": "group",
+      "name": "CPU",
+      "x": 12,
+      "y": 80,
+      "w": 0,
+      "h": 0,
+      "visible": true,
+      "locked": false,
+      "children": [
+        {
+          "id": "nightfall-CPU-panel",
+          "kind": "rectangle",
+          "name": "CPU-panel",
+          "x": 0,
+          "y": 0,
+          "w": 222,
+          "h": 138,
+          "visible": true,
+          "locked": false,
+          "fill": [
+            18,
+            28,
+            41,
+            255
+          ],
+          "stroke": [
+            38,
+            52,
+            70,
+            255
+          ],
+          "stroke_width": 1
+        },
+        {
+          "id": "nightfall-cpu-chip",
+          "kind": "text",
+          "name": "cpu-chip",
+          "x": 12,
+          "y": 9,
+          "w": 14,
+          "h": 14,
+          "visible": true,
+          "locked": false,
+          "metric": "",
+          "text": "󰻠",
+          "align": "center",
+          "valign": "bottom",
+          "clip": true,
+          "elide": false,
+          "long_text": true,
+          "length": 0,
+          "font": {
+            "family": "Turing Screen Symbols",
+            "size": 14,
+            "color": [
+              120,
+              216,
+              234,
+              255
+            ],
+            "spacing": 0,
+            "bold": false
+          },
+          "fit": true,
+          "missing_text": ""
+        },
+        {
+          "id": "nightfall-cpu-heading",
+          "kind": "text",
+          "name": "cpu-heading",
+          "x": 32,
+          "y": 6,
+          "w": 30,
+          "h": 21,
+          "visible": true,
+          "locked": false,
+          "metric": "",
+          "text": "CPU",
+          "align": "left",
+          "valign": "bottom",
+          "clip": true,
+          "elide": true,
+          "long_text": true,
+          "length": 0,
+          "font": {
+            "family": "Turing Screen Latin",
+            "size": 13,
+            "color": [
+              120,
+              216,
+              234,
+              255
+            ],
+            "spacing": 0,
+            "bold": true
+          },
+          "baseline": 17
+        },
+        {
+          "id": "nightfall-cpu-model",
+          "kind": "text",
+          "name": "cpu-model",
+          "x": 68,
+          "y": 8,
+          "w": 142,
+          "h": 19,
+          "visible": true,
+          "locked": false,
+          "metric": "",
+          "text": "AMD Ryzen 7 9800X3D",
+          "align": "right",
+          "valign": "bottom",
+          "clip": true,
+          "elide": true,
+          "long_text": true,
+          "length": 0,
+          "font": {
+            "family": "Turing Screen Latin",
+            "size": 11,
+            "color": [
+              162,
+              178,
+              198,
+              255
+            ],
+            "spacing": 0,
+            "bold": false
+          },
+          "baseline": 15
+        },
+        {
+          "id": "nightfall-cpu-gauge",
+          "kind": "text",
+          "name": "cpu-gauge",
+          "x": 12,
+          "y": 49,
+          "w": 17,
+          "h": 17,
+          "visible": true,
+          "locked": false,
+          "metric": "",
+          "text": "󰓅",
+          "align": "center",
+          "valign": "bottom",
+          "clip": true,
+          "elide": false,
+          "long_text": true,
+          "length": 0,
+          "font": {
+            "family": "Turing Screen Symbols",
+            "size": 17,
+            "color": [
+              120,
+              216,
+              234,
+              255
+            ],
+            "spacing": 0,
+            "bold": false
+          },
+          "fit": true,
+          "missing_text": ""
+        },
+        {
+          "id": "nightfall-cpu-load",
+          "kind": "sensor",
+          "name": "cpu-load",
+          "x": 34,
+          "y": 26,
+          "w": 76,
+          "h": 44,
+          "visible": true,
+          "locked": false,
+          "metric": "CpuLoad",
+          "text": "",
+          "align": "right",
+          "valign": "bottom",
+          "clip": true,
+          "elide": true,
+          "long_text": true,
+          "length": 0,
+          "font": {
+            "family": "Turing Screen Latin",
+            "size": 36,
+            "color": [
+              242,
+              245,
+              250,
+              255
+            ],
+            "spacing": 0,
+            "bold": true
+          },
+          "baseline": 40,
+          "value_format": {
+            "decimals": 0
+          }
+        },
+        {
+          "id": "nightfall-cpu-percent",
+          "kind": "text",
+          "name": "cpu-percent",
+          "x": 114,
+          "y": 48,
+          "w": 14,
+          "h": 22,
+          "visible": true,
+          "locked": false,
+          "metric": "",
+          "text": "%",
+          "align": "left",
+          "valign": "bottom",
+          "clip": true,
+          "elide": true,
+          "long_text": true,
+          "length": 0,
+          "font": {
+            "family": "Turing Screen Latin",
+            "size": 14,
+            "color": [
+              162,
+              178,
+              198,
+              255
+            ],
+            "spacing": 0,
+            "bold": false
+          },
+          "baseline": 18
+        },
+        {
+          "id": "nightfall-cpu-temp-icon",
+          "kind": "text",
+          "name": "cpu-temp-icon",
+          "x": 134,
+          "y": 53,
+          "w": 13,
+          "h": 13,
+          "visible": true,
+          "locked": false,
+          "metric": "",
+          "text": "󰔏",
+          "align": "center",
+          "valign": "bottom",
+          "clip": true,
+          "elide": false,
+          "long_text": true,
+          "length": 0,
+          "font": {
+            "family": "Turing Screen Symbols",
+            "size": 13,
+            "color": [
+              120,
+              216,
+              234,
+              255
+            ],
+            "spacing": 0,
+            "bold": false
+          },
+          "fit": true,
+          "missing_text": ""
+        },
+        {
+          "id": "nightfall-cpu-temp",
+          "kind": "sensor",
+          "name": "cpu-temp",
+          "x": 150,
+          "y": 42,
+          "w": 60,
+          "h": 28,
+          "visible": true,
+          "locked": false,
+          "metric": "CpuTemp",
+          "text": "",
+          "align": "right",
+          "valign": "bottom",
+          "clip": true,
+          "elide": true,
+          "long_text": true,
+          "length": 0,
+          "font": {
+            "family": "Turing Screen Latin",
+            "size": 20,
+            "color": [
+              120,
+              216,
+              234,
+              255
+            ],
+            "spacing": 0,
+            "bold": false
+          },
+          "baseline": 24,
+          "value_format": {
+            "decimals": 0,
+            "suffix": "°C"
+          }
+        },
+        {
+          "id": "nightfall-cpu-frequency-icon",
+          "kind": "text",
+          "name": "cpu-frequency-icon",
+          "x": 12,
+          "y": 66,
+          "w": 15,
+          "h": 60,
+          "visible": true,
+          "locked": false,
+          "metric": "",
+          "text": "󰥛",
+          "align": "center",
+          "valign": "center",
+          "clip": true,
+          "elide": false,
+          "long_text": true,
+          "length": 0,
+          "font": {
+            "family": "Turing Screen Symbols",
+            "size": 15,
+            "color": [
+              162,
+              178,
+              198,
+              255
+            ],
+            "spacing": 0,
+            "bold": false
+          },
+          "fit": true,
+          "missing_text": ""
+        },
+        {
+          "id": "nightfall-cpu-frequency",
+          "kind": "sensor",
+          "name": "cpu-frequency",
+          "x": 35,
+          "y": 66,
+          "w": 175,
+          "h": 60,
+          "visible": true,
+          "locked": false,
+          "metric": "CpuFreq",
+          "text": "",
+          "align": "right",
+          "valign": "center",
+          "clip": true,
+          "elide": true,
+          "long_text": true,
+          "length": 0,
+          "font": {
+            "family": "Turing Screen Latin",
+            "size": 20,
+            "color": [
+              242,
+              245,
+              250,
+              255
+            ],
+            "spacing": 0,
+            "bold": false
+          },
+          "value_format": {
+            "divisor": 1000,
+            "decimals": 2,
+            "suffix": " GHz"
+          }
+        }
+      ]
+    },
+    {
+      "id": "nightfall-GPU",
+      "kind": "group",
+      "name": "GPU",
+      "x": 246,
+      "y": 80,
+      "w": 0,
+      "h": 0,
+      "visible": true,
+      "locked": false,
+      "children": [
+        {
+          "id": "nightfall-GPU-panel",
+          "kind": "rectangle",
+          "name": "GPU-panel",
+          "x": 0,
+          "y": 0,
+          "w": 222,
+          "h": 138,
+          "visible": true,
+          "locked": false,
+          "fill": [
+            18,
+            28,
+            41,
+            255
+          ],
+          "stroke": [
+            38,
+            52,
+            70,
+            255
+          ],
+          "stroke_width": 1
+        },
+        {
+          "id": "nightfall-gpu-monitor",
+          "kind": "text",
+          "name": "gpu-monitor",
+          "x": 12,
+          "y": 9,
+          "w": 14,
+          "h": 14,
+          "visible": true,
+          "locked": false,
+          "metric": "",
+          "text": "󰍹",
+          "align": "center",
+          "valign": "bottom",
+          "clip": true,
+          "elide": false,
+          "long_text": true,
+          "length": 0,
+          "font": {
+            "family": "Turing Screen Symbols",
+            "size": 14,
+            "color": [
+              181,
+              183,
+              250,
+              255
+            ],
+            "spacing": 0,
+            "bold": false
+          },
+          "fit": true,
+          "missing_text": ""
+        },
+        {
+          "id": "nightfall-gpu-heading",
+          "kind": "text",
+          "name": "gpu-heading",
+          "x": 32,
+          "y": 6,
+          "w": 30,
+          "h": 21,
+          "visible": true,
+          "locked": false,
+          "metric": "",
+          "text": "GPU",
+          "align": "left",
+          "valign": "bottom",
+          "clip": true,
+          "elide": true,
+          "long_text": true,
+          "length": 0,
+          "font": {
+            "family": "Turing Screen Latin",
+            "size": 13,
+            "color": [
+              181,
+              183,
+              250,
+              255
+            ],
+            "spacing": 0,
+            "bold": true
+          },
+          "baseline": 17
+        },
+        {
+          "id": "nightfall-gpu-model",
+          "kind": "text",
+          "name": "gpu-model",
+          "x": 68,
+          "y": 8,
+          "w": 142,
+          "h": 19,
+          "visible": true,
+          "locked": false,
+          "metric": "",
+          "text": "AMD Radeon RX 7900 XT",
+          "align": "right",
+          "valign": "bottom",
+          "clip": true,
+          "elide": true,
+          "long_text": true,
+          "length": 0,
+          "font": {
+            "family": "Turing Screen Latin",
+            "size": 11,
+            "color": [
+              162,
+              178,
+              198,
+              255
+            ],
+            "spacing": 0,
+            "bold": false
+          },
+          "baseline": 15
+        },
+        {
+          "id": "nightfall-gpu-gauge",
+          "kind": "text",
+          "name": "gpu-gauge",
+          "x": 12,
+          "y": 49,
+          "w": 17,
+          "h": 17,
+          "visible": true,
+          "locked": false,
+          "metric": "",
+          "text": "󰓅",
+          "align": "center",
+          "valign": "bottom",
+          "clip": true,
+          "elide": false,
+          "long_text": true,
+          "length": 0,
+          "font": {
+            "family": "Turing Screen Symbols",
+            "size": 17,
+            "color": [
+              181,
+              183,
+              250,
+              255
+            ],
+            "spacing": 0,
+            "bold": false
+          },
+          "fit": true,
+          "missing_text": ""
+        },
+        {
+          "id": "nightfall-gpu-load",
+          "kind": "sensor",
+          "name": "gpu-load",
+          "x": 34,
+          "y": 26,
+          "w": 76,
+          "h": 44,
+          "visible": true,
+          "locked": false,
+          "metric": "GpuLoad",
+          "text": "",
+          "align": "right",
+          "valign": "bottom",
+          "clip": true,
+          "elide": true,
+          "long_text": true,
+          "length": 0,
+          "font": {
+            "family": "Turing Screen Latin",
+            "size": 36,
+            "color": [
+              242,
+              245,
+              250,
+              255
+            ],
+            "spacing": 0,
+            "bold": true
+          },
+          "baseline": 40,
+          "value_format": {
+            "decimals": 0
+          }
+        },
+        {
+          "id": "nightfall-gpu-percent",
+          "kind": "text",
+          "name": "gpu-percent",
+          "x": 114,
+          "y": 48,
+          "w": 14,
+          "h": 22,
+          "visible": true,
+          "locked": false,
+          "metric": "",
+          "text": "%",
+          "align": "left",
+          "valign": "bottom",
+          "clip": true,
+          "elide": true,
+          "long_text": true,
+          "length": 0,
+          "font": {
+            "family": "Turing Screen Latin",
+            "size": 14,
+            "color": [
+              162,
+              178,
+              198,
+              255
+            ],
+            "spacing": 0,
+            "bold": false
+          },
+          "baseline": 18
+        },
+        {
+          "id": "nightfall-gpu-temp-icon",
+          "kind": "text",
+          "name": "gpu-temp-icon",
+          "x": 134,
+          "y": 53,
+          "w": 13,
+          "h": 13,
+          "visible": true,
+          "locked": false,
+          "metric": "",
+          "text": "󰔏",
+          "align": "center",
+          "valign": "bottom",
+          "clip": true,
+          "elide": false,
+          "long_text": true,
+          "length": 0,
+          "font": {
+            "family": "Turing Screen Symbols",
+            "size": 13,
+            "color": [
+              181,
+              183,
+              250,
+              255
+            ],
+            "spacing": 0,
+            "bold": false
+          },
+          "fit": true,
+          "missing_text": ""
+        },
+        {
+          "id": "nightfall-gpu-temp",
+          "kind": "sensor",
+          "name": "gpu-temp",
+          "x": 150,
+          "y": 42,
+          "w": 60,
+          "h": 28,
+          "visible": true,
+          "locked": false,
+          "metric": "GpuTemp",
+          "text": "",
+          "align": "right",
+          "valign": "bottom",
+          "clip": true,
+          "elide": true,
+          "long_text": true,
+          "length": 0,
+          "font": {
+            "family": "Turing Screen Latin",
+            "size": 20,
+            "color": [
+              181,
+              183,
+              250,
+              255
+            ],
+            "spacing": 0,
+            "bold": false
+          },
+          "baseline": 24,
+          "value_format": {
+            "decimals": 0,
+            "suffix": "°C"
+          }
+        },
+        {
+          "id": "nightfall-gpu-power-icon",
+          "kind": "text",
+          "name": "gpu-power-icon",
+          "x": 12,
+          "y": 80,
+          "w": 13,
+          "h": 13,
+          "visible": true,
+          "locked": false,
+          "metric": "",
+          "text": "󰛕",
+          "align": "center",
+          "valign": "bottom",
+          "clip": true,
+          "elide": false,
+          "long_text": true,
+          "length": 0,
+          "font": {
+            "family": "Turing Screen Symbols",
+            "size": 13,
+            "color": [
+              162,
+              178,
+              198,
+              255
+            ],
+            "spacing": 0,
+            "bold": false
+          },
+          "fit": true,
+          "missing_text": ""
+        },
+        {
+          "id": "nightfall-gpu-power",
+          "kind": "sensor",
+          "name": "gpu-power",
+          "x": 31,
+          "y": 74,
+          "w": 78,
+          "h": 23,
+          "visible": true,
+          "locked": false,
+          "metric": "GpuPower",
+          "text": "",
+          "align": "right",
+          "valign": "bottom",
+          "clip": true,
+          "elide": true,
+          "long_text": true,
+          "length": 0,
+          "font": {
+            "family": "Turing Screen Latin",
+            "size": 15,
+            "color": [
+              242,
+              245,
+              250,
+              255
+            ],
+            "spacing": 0,
+            "bold": false
+          },
+          "baseline": 19,
+          "value_format": {
+            "decimals": 0,
+            "suffix": " W"
+          }
+        },
+        {
+          "id": "nightfall-gpu-fan-icon",
+          "kind": "text",
+          "name": "gpu-fan-icon",
+          "x": 112,
+          "y": 80,
+          "w": 13,
+          "h": 13,
+          "visible": true,
+          "locked": false,
+          "metric": "",
+          "text": "󰈐",
+          "align": "center",
+          "valign": "bottom",
+          "clip": true,
+          "elide": false,
+          "long_text": true,
+          "length": 0,
+          "font": {
+            "family": "Turing Screen Symbols",
+            "size": 13,
+            "color": [
+              162,
+              178,
+              198,
+              255
+            ],
+            "spacing": 0,
+            "bold": false
+          },
+          "fit": true,
+          "missing_text": ""
+        },
+        {
+          "id": "nightfall-gpu-fan",
+          "kind": "sensor",
+          "name": "gpu-fan",
+          "x": 131,
+          "y": 74,
+          "w": 79,
+          "h": 23,
+          "visible": true,
+          "locked": false,
+          "metric": "GpuFan",
+          "text": "",
+          "align": "right",
+          "valign": "bottom",
+          "clip": true,
+          "elide": true,
+          "long_text": true,
+          "length": 0,
+          "font": {
+            "family": "Turing Screen Latin",
+            "size": 15,
+            "color": [
+              242,
+              245,
+              250,
+              255
+            ],
+            "spacing": 0,
+            "bold": false
+          },
+          "baseline": 19
+        },
+        {
+          "id": "nightfall-gpu-vram-icon",
+          "kind": "text",
+          "name": "gpu-vram-icon",
+          "x": 12,
+          "y": 102,
+          "w": 13,
+          "h": 13,
+          "visible": true,
+          "locked": false,
+          "metric": "",
+          "text": "󰍛",
+          "align": "center",
+          "valign": "bottom",
+          "clip": true,
+          "elide": false,
+          "long_text": true,
+          "length": 0,
+          "font": {
+            "family": "Turing Screen Symbols",
+            "size": 13,
+            "color": [
+              162,
+              178,
+              198,
+              255
+            ],
+            "spacing": 0,
+            "bold": false
+          },
+          "fit": true,
+          "missing_text": ""
+        },
+        {
+          "id": "nightfall-gpu-vram",
+          "kind": "sensor",
+          "name": "gpu-vram",
+          "x": 31,
+          "y": 97,
+          "w": 179,
+          "h": 22,
+          "visible": true,
+          "locked": false,
+          "metric": "GpuRamUsage",
+          "text": "",
+          "align": "right",
+          "valign": "bottom",
+          "clip": true,
+          "elide": true,
+          "long_text": true,
+          "length": 0,
+          "font": {
+            "family": "Turing Screen Latin",
+            "size": 14,
+            "color": [
+              242,
+              245,
+              250,
+              255
+            ],
+            "spacing": 0,
+            "bold": false
+          },
+          "baseline": 18
+        },
+        {
+          "id": "nightfall-gpu-vram-bar",
+          "kind": "bar",
+          "name": "gpu-vram-bar",
+          "x": 12,
+          "y": 121,
+          "w": 198,
+          "h": 5,
+          "visible": true,
+          "locked": false,
+          "metric": "GpuRamLoad",
+          "step": 1,
+          "front": [
+            181,
+            183,
+            250,
+            255
+          ],
+          "back": [
+            43,
+            53,
+            67,
+            255
+          ],
+          "corner_radius": 2.5
+        }
+      ]
+    },
+    {
+      "id": "nightfall-RAM",
+      "kind": "group",
+      "name": "RAM",
+      "x": 12,
+      "y": 226,
+      "w": 0,
+      "h": 0,
+      "visible": true,
+      "locked": false,
+      "children": [
+        {
+          "id": "nightfall-RAM-panel",
+          "kind": "rectangle",
+          "name": "RAM-panel",
+          "x": 0,
+          "y": 0,
+          "w": 222,
+          "h": 82,
+          "visible": true,
+          "locked": false,
+          "fill": [
+            18,
+            28,
+            41,
+            255
+          ],
+          "stroke": [
+            38,
+            52,
+            70,
+            255
+          ],
+          "stroke_width": 1
+        },
+        {
+          "id": "nightfall-ram-chip",
+          "kind": "text",
+          "name": "ram-chip",
+          "x": 12,
+          "y": 8,
+          "w": 15,
+          "h": 15,
+          "visible": true,
+          "locked": false,
+          "metric": "",
+          "text": "󰍛",
+          "align": "center",
+          "valign": "bottom",
+          "clip": true,
+          "elide": false,
+          "long_text": true,
+          "length": 0,
+          "font": {
+            "family": "Turing Screen Symbols",
+            "size": 15,
+            "color": [
+              228,
+              196,
+              139,
+              255
+            ],
+            "spacing": 0,
+            "bold": false
+          },
+          "fit": true,
+          "missing_text": ""
+        },
+        {
+          "id": "nightfall-ram-heading",
+          "kind": "text",
+          "name": "ram-heading",
+          "x": 34,
+          "y": 5,
+          "w": 52,
+          "h": 22,
+          "visible": true,
+          "locked": false,
+          "metric": "",
+          "text": "RAM",
+          "align": "left",
+          "valign": "bottom",
+          "clip": true,
+          "elide": true,
+          "long_text": true,
+          "length": 0,
+          "font": {
+            "family": "Turing Screen Latin",
+            "size": 14,
+            "color": [
+              228,
+              196,
+              139,
+              255
+            ],
+            "spacing": 0,
+            "bold": true
+          },
+          "baseline": 18
+        },
+        {
+          "id": "nightfall-ram-usage",
+          "kind": "sensor",
+          "name": "ram-usage",
+          "x": 12,
+          "y": 31,
+          "w": 198,
+          "h": 30,
+          "visible": true,
+          "locked": false,
+          "metric": "RamUsage",
+          "text": "",
+          "align": "left",
+          "valign": "bottom",
+          "clip": true,
+          "elide": true,
+          "long_text": true,
+          "length": 0,
+          "font": {
+            "family": "Turing Screen Latin",
+            "size": 22,
+            "color": [
+              242,
+              245,
+              250,
+              255
+            ],
+            "spacing": 0,
+            "bold": true
+          },
+          "baseline": 26
+        },
+        {
+          "id": "nightfall-ram-usage-bar",
+          "kind": "bar",
+          "name": "ram-usage-bar",
+          "x": 12,
+          "y": 65,
+          "w": 198,
+          "h": 6,
+          "visible": true,
+          "locked": false,
+          "metric": "RamLoad",
+          "step": 1,
+          "front": [
+            228,
+            196,
+            139,
+            255
+          ],
+          "back": [
+            43,
+            53,
+            67,
+            255
+          ],
+          "corner_radius": 3
+        }
+      ]
+    },
+    {
+      "id": "nightfall-NET",
+      "kind": "group",
+      "name": "NET",
+      "x": 246,
+      "y": 226,
+      "w": 0,
+      "h": 0,
+      "visible": true,
+      "locked": false,
+      "children": [
+        {
+          "id": "nightfall-NET-panel",
+          "kind": "rectangle",
+          "name": "NET-panel",
+          "x": 0,
+          "y": 0,
+          "w": 222,
+          "h": 82,
+          "visible": true,
+          "locked": false,
+          "fill": [
+            18,
+            28,
+            41,
+            255
+          ],
+          "stroke": [
+            38,
+            52,
+            70,
+            255
+          ],
+          "stroke_width": 1
+        },
+        {
+          "id": "nightfall-net-network-icon",
+          "kind": "text",
+          "name": "net-network-icon",
+          "x": 12,
+          "y": 8,
+          "w": 15,
+          "h": 15,
+          "visible": true,
+          "locked": false,
+          "metric": "",
+          "text": "󰖟",
+          "align": "center",
+          "valign": "bottom",
+          "clip": true,
+          "elide": false,
+          "long_text": true,
+          "length": 0,
+          "font": {
+            "family": "Turing Screen Symbols",
+            "size": 15,
+            "color": [
+              117,
+              216,
+              175,
+              255
+            ],
+            "spacing": 0,
+            "bold": false
+          },
+          "fit": true,
+          "missing_text": ""
+        },
+        {
+          "id": "nightfall-net-heading",
+          "kind": "text",
+          "name": "net-heading",
+          "x": 34,
+          "y": 5,
+          "w": 35,
+          "h": 22,
+          "visible": true,
+          "locked": false,
+          "metric": "",
+          "text": "NET",
+          "align": "left",
+          "valign": "bottom",
+          "clip": true,
+          "elide": true,
+          "long_text": true,
+          "length": 0,
+          "font": {
+            "family": "Turing Screen Latin",
+            "size": 14,
+            "color": [
+              117,
+              216,
+              175,
+              255
+            ],
+            "spacing": 0,
+            "bold": true
+          },
+          "baseline": 18
+        },
+        {
+          "id": "nightfall-net-ip",
+          "kind": "sensor",
+          "name": "net-ip",
+          "x": 76,
+          "y": 8,
+          "w": 134,
+          "h": 19,
+          "visible": true,
+          "locked": false,
+          "metric": "LocalIp",
+          "text": "",
+          "align": "right",
+          "valign": "bottom",
+          "clip": true,
+          "elide": true,
+          "long_text": true,
+          "length": 0,
+          "font": {
+            "family": "Turing Screen Latin",
+            "size": 11,
+            "color": [
+              162,
+              178,
+              198,
+              255
+            ],
+            "spacing": 0,
+            "bold": false
+          },
+          "baseline": 15
+        },
+        {
+          "id": "nightfall-net-down-icon",
+          "kind": "text",
+          "name": "net-down-icon",
+          "x": 12,
+          "y": 37,
+          "w": 15,
+          "h": 15,
+          "visible": true,
+          "locked": false,
+          "metric": "",
+          "text": "󰇚",
+          "align": "center",
+          "valign": "bottom",
+          "clip": true,
+          "elide": false,
+          "long_text": true,
+          "length": 0,
+          "font": {
+            "family": "Turing Screen Symbols",
+            "size": 15,
+            "color": [
+              117,
+              216,
+              175,
+              255
+            ],
+            "spacing": 0,
+            "bold": false
+          },
+          "fit": true,
+          "missing_text": ""
+        },
+        {
+          "id": "nightfall-net-down",
+          "kind": "sensor",
+          "name": "net-down",
+          "x": 39,
+          "y": 32,
+          "w": 171,
+          "h": 24,
+          "visible": true,
+          "locked": false,
+          "metric": "InternetDown",
+          "text": "",
+          "align": "right",
+          "valign": "bottom",
+          "clip": true,
+          "elide": true,
+          "long_text": true,
+          "length": 0,
+          "font": {
+            "family": "Turing Screen Latin",
+            "size": 16,
+            "color": [
+              117,
+              216,
+              175,
+              255
+            ],
+            "spacing": 0,
+            "bold": false
+          },
+          "baseline": 20,
+          "value_format": {
+            "auto_unit": "bytes/s",
+            "decimals": 1
+          }
+        },
+        {
+          "id": "nightfall-net-up-icon",
+          "kind": "text",
+          "name": "net-up-icon",
+          "x": 12,
+          "y": 58,
+          "w": 15,
+          "h": 15,
+          "visible": true,
+          "locked": false,
+          "metric": "",
+          "text": "󰕒",
+          "align": "center",
+          "valign": "bottom",
+          "clip": true,
+          "elide": false,
+          "long_text": true,
+          "length": 0,
+          "font": {
+            "family": "Turing Screen Symbols",
+            "size": 15,
+            "color": [
+              162,
+              178,
+              198,
+              255
+            ],
+            "spacing": 0,
+            "bold": false
+          },
+          "fit": true,
+          "missing_text": ""
+        },
+        {
+          "id": "nightfall-net-up",
+          "kind": "sensor",
+          "name": "net-up",
+          "x": 39,
+          "y": 53,
+          "w": 171,
+          "h": 24,
+          "visible": true,
+          "locked": false,
+          "metric": "InternetUp",
+          "text": "",
+          "align": "right",
+          "valign": "bottom",
+          "clip": true,
+          "elide": true,
+          "long_text": true,
+          "length": 0,
+          "font": {
+            "family": "Turing Screen Latin",
+            "size": 16,
+            "color": [
+              242,
+              245,
+              250,
+              255
+            ],
+            "spacing": 0,
+            "bold": false
+          },
+          "baseline": 20,
+          "value_format": {
+            "auto_unit": "bytes/s",
+            "decimals": 1
+          }
+        }
+      ]
+    }
+  ]
+}

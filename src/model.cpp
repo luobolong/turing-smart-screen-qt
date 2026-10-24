@@ -110,6 +110,8 @@ QJsonObject component(const QString &kind) {
     else if (kind == "NET")
         add("Upload", "InternetUp", 12, 84, 16);
     else {
+        if (kind == "RAM")
+            add("Used / total GB", "RamUsage", 12, 78, 16);
         auto bar = newLayer("bar", "Progress", metric);
         bar["x"] = 12;
         bar["y"] = 104;
@@ -123,7 +125,7 @@ Theme Theme::starter() {
     Theme t;
     t.data = {{"format", "turing-screen-qt"},
               {"version", 1},
-              {"name", "Qt · System overview"},
+              {"name", "System overview"},
               {"landscape", true}};
     QJsonArray a;
     auto cpu = component("CPU");
@@ -147,6 +149,11 @@ Theme Theme::starter() {
 }
 void Theme::validate() const {
     check(data["layers"].isArray(), "Missing layers array");
+    if (data.contains("orientation")) {
+        const auto direction = data["orientation"];
+        check(direction.isDouble() && direction.toInt(-1) >= 0 && direction.toInt(-1) <= 3 &&
+                  direction.toDouble() == direction.toInt(), "Invalid theme orientation");
+    }
     int total = 0;
     QSet<QString> ids;
     std::function<void(QJsonArray, int)> visit = [&](QJsonArray a, int depth) {
@@ -230,6 +237,8 @@ static QJsonObject legacyItem(QJsonObject o) {
 Theme Theme::fromJson(const QJsonObject &json) {
     if (json["format"] == "turing-screen-qt") {
         Theme t{json};
+        if (t.name() == "Qt · System overview")
+            t.data["name"] = "System overview";
         t.validate();
         return t;
     }
@@ -542,22 +551,38 @@ QString canonical(QString k) {
         {"CPUPWR", "CpuPower"},         {"GPUPWR", "GpuPower"},
         {"DRVLOAD", "HDDLoad"},         {"UPSPEED", "InternetUp"},
         {"DOWNDSPEED", "InternetDown"}, {"DOWNSPEED", "InternetDown"},
-        {"VULOMELOAD", "Volume"},       {"RAM", "RamValue"}};
+        {"VULOMELOAD", "Volume"},       {"VOLUMELOAD", "Volume"}, {"RAM", "RamValue"}};
     auto u = k.toUpper();
     if (aliases.contains(u))
         return aliases.value(u);
-    for (auto m : metrics())
-        if (m.first.toUpper() == u)
-            return m.first;
+    static const QHash<QString, QString> names = [] {
+        QHash<QString, QString> result;
+        for (const auto &metric : metrics()) result.insert(metric.first.toUpper(), metric.first);
+        return result;
+    }();
+    if (const auto it = names.constFind(u); it != names.cend()) return *it;
     return k;
 }
-QVector<QPair<QString, QString>> metrics() {
-    return {{"CpuLoad", "CPU 使用率"},    {"CpuFreq", "CPU 频率"},   {"CpuTemp", "CPU 温度"},
-            {"CpuModel", "CPU 型号"},     {"GpuLoad", "GPU 使用率"}, {"GpuTemp", "GPU 温度"},
-            {"GpuFreq", "GPU 频率"},      {"GpuRam", "显存占用"},    {"RamValue", "内存占用"},
-            {"RamLoad", "内存使用率"},    {"RamValid", "可用内存"},  {"RamModel", "内存总量"},
+const QVector<QPair<QString, QString>> &metrics() {
+    static const QVector<QPair<QString, QString>> list{{"CpuLoad", "CPU 使用率"},    {"CpuFreq", "CPU 频率"},   {"CpuTemp", "CPU 温度"},
+            {"CpuModel", "CPU 型号"},     {"CpuPower", "CPU 功耗"}, {"CpuFan", "CPU 风扇转速"},
+            {"CpuPump", "水泵转速"},      {"CpuVoltage", "CPU 电压"},
+            {"GpuModel", "GPU 型号"},     {"GpuLoad", "GPU 使用率"}, {"GpuTemp", "GPU 温度"},
+            {"GpuFreq", "GPU 频率"},      {"GpuPower", "GPU 功耗"},  {"GpuFan", "GPU 风扇转速"},
+            {"GpuVoltage", "GPU 电压"},   {"GpuRam", "显存已用 (MB)"}, {"GpuRamLoad", "显存使用率"},
+            {"GpuRamTotal", "显存总量 (MB)"}, {"GpuRamFree", "显存可用 (MB)"},
+            {"GpuRamUsage", "显存已用 / 总量 (GB)"},
+            {"RamValue", "内存已用 (GB)"}, {"RamTotal", "内存总量 (GB)"},
+            {"RamUsage", "内存已用 / 总量 (GB)"},
+            {"RamLoad", "内存使用率"},    {"RamValid", "内存可用 (GB)"}, {"RamModel", "内存容量"},
             {"HDDLoad", "分区使用率"},    {"HDDTemp", "硬盘温度"},   {"InternetUp", "上传速率"},
-            {"InternetDown", "下载速率"}, {"Time", "时间"},          {"Date", "日期"},
-            {"Volume", "音量"},           {"Weather", "天气"}};
+            {"InternetDown", "下载速率"}, {"LocalIp", "本机 IP 地址"}, {"Time", "时间"}, {"Date", "日期"},
+            {"TimeSeconds", "时间（含秒）"}, {"Weekday", "星期"},
+            {"DateWeekday", "日期 / 星期（英文）"}, {"OsName", "系统版本"}, {"KernelVersion", "内核版本"},
+            {"OsIcon", "系统图标"},
+            {"Volume", "音量"},           {"Weather", "天气"},
+            {"WeatherCity", "天气城市"}, {"WeatherTemp", "室外温度"}, {"WeatherCondition", "天气状况"},
+            {"WeatherIcon", "天气图标"}};
+    return list;
 }
 } // namespace Screen

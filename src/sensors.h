@@ -1,4 +1,6 @@
 #pragma once
+#include "audio.h"
+#include "weather.h"
 #include <QElapsedTimer>
 #include <QHash>
 #include <QJsonObject>
@@ -7,6 +9,7 @@ namespace Screen {
 struct Snapshot {
     QHash<QString, double> values;
     QHash<QString, QString> strings;
+    QHash<QString, QString> sources, unavailable;
     QString timestamp;
     static Snapshot fromJson(const QJsonObject &json);
     QJsonObject json() const;
@@ -23,10 +26,17 @@ ProcessStats processStats();
 void resourceTrace(const char *stage);
 class Collector {
 public:
-    Collector();
+    explicit Collector(const QString &sysfsRoot = QStringLiteral("/sys"),
+                       const QString &procRoot = QStringLiteral("/proc"));
     Snapshot collect(const QString &disk = {});
+    void setWeather(bool enabled, const QString &city = {});
+    void setAudioEnabled(bool enabled);
 
 private:
+    QString sysfsRoot, procRoot;
+    std::unique_ptr<AudioVolume> audio;
+    std::unique_ptr<WeatherClient> weather;
+    QHash<QString, double> previousEnergy;
     quint64 previousTotal = 0, previousIdle = 0, previousUp = 0, previousDown = 0;
     QElapsedTimer elapsed;
 };
