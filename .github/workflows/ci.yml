@@ -1,0 +1,86 @@
+name: Build and test
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: ${{ matrix.platform }} / Qt 6.8.3
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x64
+            os: ubuntu-24.04
+            qt-arch: linux_gcc_64
+            executable: turing-screen-qt
+          - platform: windows-x64
+            os: windows-2022
+            qt-arch: win64_msvc2022_64
+            executable: turing-screen-qt.exe
+    env:
+      QT_QPA_PLATFORM: offscreen
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y cmake ninja-build pkg-config libpulse-dev libgl1-mesa-dev
+
+      - name: Set up MSVC
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
+        with:
+          arch: x64
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@a9c63c7c123f3069cff414e7e482d95dfa9d8125 # v4.4.1
+        with:
+          version: '6.8.3'
+          arch: ${{ matrix.qt-arch }}
+          cache: true
+
+      - name: Configure
+        run: cmake -S . -B build/ci -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+
+      - name: Build
+        run: cmake --build build/ci --parallel 4
+
+      - name: Run core, GUI and startup tests
+        run: >-
+          ctest --test-dir build/ci -C Release --output-on-failure --timeout 90
+          --output-junit "${{ github.workspace }}/build/ci/test-results.xml"
+
+      - name: Render bundled theme
+        run: >-
+          ./build/ci/${{ matrix.executable }} --render-theme assets/themes/nightfall.json
+          --snapshot tests/fixtures/nightfall-sample.json --output build/ci/nightfall.png
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: test-results-${{ matrix.platform }}
+          path: |
+            build/ci/test-results.xml
+            build/ci/Testing/Temporary/*.log
+            build/ci/nightfall.png
+          if-no-files-found: ignore
+          retention-days: 7

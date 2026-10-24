@@ -4,6 +4,7 @@
 #include "renderer.h"
 #include "sensors.h"
 #include "runtime.h"
+#include "startup.h"
 #include <memory>
 #include <QElapsedTimer>
 #include <QJsonObject>
@@ -37,8 +38,10 @@ class MainWindow : public QMainWindow {
     std::shared_ptr<DisplayRuntime> runtime;
 
 public:
-    explicit MainWindow(QString dataDir, QString themePath = {}, QWidget *parent = nullptr);
-    explicit MainWindow(std::shared_ptr<DisplayRuntime> runtime, QWidget *parent = nullptr);
+    explicit MainWindow(QString dataDir, QString themePath = {}, QWidget *parent = nullptr,
+                        std::shared_ptr<StartupBackend> startupBackend = {});
+    explicit MainWindow(std::shared_ptr<DisplayRuntime> runtime, QWidget *parent = nullptr,
+                        std::shared_ptr<StartupBackend> startupBackend = {});
     ~MainWindow() override;
     Theme &theme;
     Snapshot &sample;
@@ -103,6 +106,9 @@ private:
     QLineEdit *layerName = nullptr, *layerText = nullptr;
     QSpinBox *xBox = nullptr, *yBox = nullptr, *wBox = nullptr, *hBox = nullptr, *fontBox = nullptr;
     QCheckBox *visibleBox = nullptr, *lockedBox = nullptr, *mirrorBox = nullptr;
+    std::unique_ptr<StartupController> startup;
+    QCheckBox *startupToggle = nullptr;
+    QLabel *startupStatus = nullptr;
     QPushButton *fontColor = nullptr, *fillColor = nullptr;
     QTableWidget *sensorTable = nullptr;
     QPlainTextEdit *diagnosticText = nullptr;
@@ -116,6 +122,7 @@ private:
     void buildThemePage(QWidget *page);
     void buildSensors(QWidget *page);
     void buildSettings(QWidget *page);
+    void updateStartupUi();
     void configureWeather();
     void buildDiagnostics(QWidget *page);
     void buildLibrary();

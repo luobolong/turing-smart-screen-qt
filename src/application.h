@@ -24,11 +24,13 @@ private:
     std::unique_ptr<QTemporaryFile> suspended;
     std::unique_ptr<QMenu> menu;
     QSystemTrayIcon *tray;
+    QAction *showAction = nullptr, *lightAction = nullptr, *sendAction = nullptr, *quitAction = nullptr;
     QTimer countdown;
     std::function<bool()> trayAvailable;
     bool closed = false, unsaved = false;
     void makeWindow();
     void makeTray();
+    void updateTrayState();
     void scheduleLightweight();
     QJsonObject editorState() const;
     void restoreEditor(const QJsonObject &state);

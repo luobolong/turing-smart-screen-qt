@@ -12,7 +12,8 @@ ApplicationController::ApplicationController(QString directory, const QString &t
     countdown.setSingleShot(true);
     countdown.setTimerType(Qt::PreciseTimer);
     connect(&countdown, &QTimer::timeout, this, [this] {
-        if (QApplication::activeModalWidget() || QApplication::activePopupWidget()) {
+        if (QApplication::activeModalWidget() || QApplication::activePopupWidget() ||
+            (editor && editor->startup->busy())) {
             countdown.start(1000);
             return;
         }
@@ -21,6 +22,8 @@ ApplicationController::ApplicationController(QString directory, const QString &t
     connect(tray, &QSystemTrayIcon::activated, this, [this](QSystemTrayIcon::ActivationReason reason) {
         if (reason == QSystemTrayIcon::Trigger || reason == QSystemTrayIcon::DoubleClick) showWindow();
     });
+    connect(runtime.get(), &DisplayRuntime::updated, this, &ApplicationController::updateTrayState);
+    connect(&runtime->device, &Device::statusChanged, this, &ApplicationController::updateTrayState, Qt::QueuedConnection);
     makeWindow();
     makeTray();
 }
@@ -38,6 +41,7 @@ QString ApplicationController::L(const char *zh, const char *en) const {
 void ApplicationController::makeWindow() {
     editor = std::make_unique<MainWindow>(runtime);
     editor->trayAvailable = trayAvailable;
+    connect(editor->startup.get(), &StartupController::changed, this, &ApplicationController::updateTrayState);
     connect(editor.get(), &MainWindow::windowOpened, this, [this] { countdown.stop(); closed = false; });
     connect(editor.get(), &MainWindow::lightweightRequested, this, [this] { enterLightweight(); }, Qt::QueuedConnection);
     connect(editor.get(), &MainWindow::closedToTray, this, [this] {
@@ -52,20 +56,43 @@ void ApplicationController::makeWindow() {
 void ApplicationController::makeTray() {
     if (!menu) {
         menu = std::make_unique<QMenu>();
+        connect(menu.get(), &QMenu::aboutToShow, this, &ApplicationController::updateTrayState);
+        showAction = menu->addAction(QString(), this, &ApplicationController::showWindow);
+        menu->addSeparator();
+        lightAction = menu->addAction(QString(), this, [this](bool checked) {
+            if (checked) enterLightweight();
+            else showWindow();
+            updateTrayState(); // Restore the check mark when a transition fails.
+        }, Qt::QueuedConnection);
+        lightAction->setObjectName("lightweightModeAction");
+        lightAction->setCheckable(true);
+        sendAction = menu->addAction(QString(), this, [this](bool checked) {
+            if (runtime->device.status().connected && checked != runtime->sending) runtime->toggleSending();
+            updateTrayState();
+        });
+        sendAction->setObjectName("sendDataAction");
+        sendAction->setCheckable(true);
+        menu->addSeparator();
+        quitAction = menu->addAction(QString(), this, &ApplicationController::quit);
         tray->setContextMenu(menu.get());
     }
-    menu->clear();
     if (editor) menu->setPalette(editor->palette());
-    menu->addAction(L("显示窗口", "Show window"), this, &ApplicationController::showWindow);
-    auto light = menu->addAction(L("进入轻量模式", "Enter lightweight mode"), this,
-                                [this] { enterLightweight(); }, Qt::QueuedConnection);
-    light->setEnabled(!isLightweight() && trayAvailable());
-    menu->addAction(L("暂停 / 继续发送", "Pause / resume sending"), runtime.get(), &DisplayRuntime::toggleSending);
-    menu->addSeparator();
-    menu->addAction(L("退出", "Exit"), this, &ApplicationController::quit);
+    showAction->setText(L("显示窗口", "Show window"));
+    lightAction->setText(L("轻量模式", "Lightweight mode"));
+    sendAction->setText(L("发送数据", "Send data"));
+    quitAction->setText(L("退出", "Exit"));
     tray->setIcon(qApp->style()->standardIcon(QStyle::SP_ComputerIcon));
-    tray->setToolTip(isLightweight() ? L("Turing Screen · 轻量模式", "Turing Screen · Lightweight") : "Turing Screen");
+    updateTrayState();
     tray->show();
+}
+void ApplicationController::updateTrayState() {
+    if (!lightAction || !sendAction) return;
+    const auto device = runtime->device.status();
+    lightAction->setChecked(isLightweight());
+    lightAction->setEnabled(trayAvailable() && (!editor || !editor->startup->busy()));
+    sendAction->setChecked(runtime->sending && device.connected);
+    sendAction->setEnabled(device.connected && !device.connecting);
+    tray->setToolTip(isLightweight() ? L("Turing Screen · 轻量模式", "Turing Screen · Lightweight") : "Turing Screen");
 }
 void ApplicationController::scheduleLightweight() {
     countdown.stop();
@@ -116,6 +143,7 @@ void ApplicationController::restoreEditor(const QJsonObject &state) {
 bool ApplicationController::enterLightweight() {
     if (isLightweight()) return true;
     if (!editor || !trayAvailable() || QApplication::activeModalWidget() || QApplication::activePopupWidget()) return false;
+    if (editor->startup->busy()) return false;
     // Write histories and inactive drafts before releasing them from memory.
     auto file = std::make_unique<QTemporaryFile>(runtime->dataDir + "/lightweight-session-XXXXXX.json");
     const auto state = editorState();

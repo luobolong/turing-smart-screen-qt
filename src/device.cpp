@@ -279,6 +279,7 @@ void Device::connectPort(const QString &p, int direction, int light, bool mirror
     c.light = light;
     c.mirrored = mirrored;
     enqueue(c);
+    emit statusChanged();
 }
 void Device::disconnectPort() {
     Command c;
@@ -338,6 +339,8 @@ void Device::run() {
                     state.connected = true;
                     state.connecting = false;
                     state.message = c.port;
+                    lock.unlock();
+                    emit statusChanged();
                 } else if (c.kind == 2) {
                     serial.close();
                     connected = false;
@@ -346,6 +349,8 @@ void Device::run() {
                     state.connected = false;
                     state.connecting = false;
                     state.message = "Disconnected";
+                    lock.unlock();
+                    emit statusChanged();
                 } else if (connected) {
                     if (c.kind == 3)
                         serial.write(Protocol::brightness(c.value));
@@ -371,6 +376,8 @@ void Device::run() {
                         connected = false;
                         QMutexLocker lock(&mutex);
                         state.connected = false;
+                        lock.unlock();
+                        emit statusChanged();
                     } else if (c.kind == 8) {
                         serial.write(Protocol::header(0, 0, 0, 0, c.value ? 0x6d : 0x6c));
                         previous = {};
@@ -404,6 +411,8 @@ void Device::run() {
             state.connected = false;
             state.connecting = false;
             state.message = QString::fromUtf8(e.what());
+            lock.unlock();
+            emit statusChanged();
         }
     }
 }

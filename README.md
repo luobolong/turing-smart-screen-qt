@@ -30,7 +30,7 @@
 - 天气可在设置中开启并填写城市，留空使用 ipwho.is 按 IP 粗略定位（代理可能影响位置）。数据来自 [Open-Meteo](https://open-meteo.com/)，每 10 分钟更新；失败后退避重试，缓存最多保留 30 分钟。Nightfall 在未明确关闭天气时默认启用，其余主题默认关闭。城市名、温度、天气状况与天气图标可分别绑定；天气文字使用英文，图标随当前天气变化。
 - `LocalIp` 显示活动网卡的本机 IP，优先 IPv4 和默认路由网卡；没有 IPv4 时使用非链路本地 IPv6。地址随采样更新，来源中记录网卡名，无可用地址时显示 `--`。
 
-Windows GPU 采集、NVIDIA / Intel GPU 采集、Windows 硬件温度 / 风扇助手尚未实现；Linux 未由驱动提供的传感器也无法在应用中直接获取。随附主题中的 CPU / GPU 风扇、CPU 功耗、显存使用率等指标已注册，可在属性中绑定。音量兼容旧主题 `VulomeLoad` 及 `VolumeLoad` 名称。NixOS 支持下文的 systemd 自启动模块；其他精简范围：其他平台自动启动、GIF 动画、Photoshop 高级图像处理。官方 `.data` 只读导入；修改保存为独立 JSON。
+Windows GPU 采集、NVIDIA / Intel GPU 采集、Windows 硬件温度 / 风扇助手尚未实现；Linux 未由驱动提供的传感器也无法在应用中直接获取。随附主题中的 CPU / GPU 风扇、CPU 功耗、显存使用率等指标已注册，可在属性中绑定。音量兼容旧主题 `VulomeLoad` 及 `VolumeLoad` 名称。Windows / Linux 支持设置中的登录自启动，NixOS 也支持下文的声明式 systemd 模块；其他精简范围：GIF 动画、Photoshop 高级图像处理。官方 `.data` 只读导入；修改保存为独立 JSON。
 
 ## 夜航主题与组合编辑
 
@@ -89,6 +89,18 @@ CPU / GPU 图标及标签在标题行左侧，固定型号 `AMD Ryzen 7 9800X3D`
 `build/linux/turing-screen-qt --dump-sensors` 输出实时采样、来源和不可用原因，方便排查驱动或权限问题。加 `--weather-city "Taipei, Taiwan"` 可测试天气（等待最多 20 秒，不写入设置）。
 
 本机验证使用 Windows 11 / Qt 6.8.0 / MSVC 2022 和 WSLg Arch Linux / Qt 6.11.1 / GCC 16。Windows 默认使用 GDI 字体后端，减少本环境中 DirectWrite 首次绘制的内存开销；仍可用 `QT_QPA_PLATFORM` 显式覆盖。
+
+GitHub Actions 的 [Build and test](.github/workflows/ci.yml) 在 push、pull request 和手动触发时，使用 Qt 6.8.3 分别在 Ubuntu 24.04 / GCC 与 Windows Server 2022 / MSVC 上执行 Release 构建、core / GUI / startup 测试和 Nightfall 示例渲染。测试报告、日志和预览图作为 artifacts 保留 7 天；不包含 Nix 检查。
+
+## 开机启动
+
+设置中的「开机启动（登录后） / Start at sign-in」读取系统中的持久启动状态，开启后在下次登录图形桌面时启动。开关异步更新，失败时显示原因并回读实际状态；关闭不会停止当前程序或中断副屏发送。不在每次程序启动时自动重写启动项。
+
+- Windows：添加或移除当前用户 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` 下的 `TuringScreen` 项，无需管理员权限。命令保留当前数据目录，对含空格的路径转义；命令超过 Windows Run 的 260 字符限制时报告错误，不写入无效项目。实现依据 [Microsoft Run 启动项文档](https://learn.microsoft.com/en-us/windows/win32/setupapi/run-and-runonce-registry-keys)。
+- Linux：使用 `turing-screen.service` systemd 用户服务，在 `graphical-session.target` 启动，图形会话结束时停止。没有现有服务时写入 `$XDG_CONFIG_HOME/systemd/user/`（默认 `~/.config/systemd/user/`）；优先复用 NixOS 等已安装服务，避免重复启动。安装目录包含 `run.sh` 或 Nix Qt 包装器时使用对应启动入口。普通发行版需要 systemd 用户管理器，以及已向其导入图形会话环境的桌面。
+- 关闭 Linux 自启动时禁用用户启用关系，并创建用户级屏蔽，覆盖 NixOS `/etc/systemd/user` 中的启用关系；重新开启移除屏蔽。不会启停当前服务，也不会修改 Nix store 或系统级单元。临时运行实例不影响持久启动状态的判断。通过 Home Manager 或手工直接管理同一用户级单元文件时，开关只读并提示在原配置中修改，保留其内容。相关语义见 [systemctl](https://www.freedesktop.org/software/systemd/man/latest/systemctl.html)。
+
+移动或删除手动安装的程序后，应在新位置重新开启自启动来更新路径。NixOS 声明式管理的服务保留其原有参数和启动目标；界面中的用户级屏蔽不会因一次系统重建自动消失，重新开启时会移除。
 
 ## Nix / NixOS
 
@@ -152,6 +164,8 @@ journalctl --user -u turing-screen.service -b
 轻量模式可在「设置 / Settings」中立即进入，也可启用「关闭主窗口后自动进入轻量模式」，设置 1–86400 秒的倒计时（默认 60 秒，自动进入默认关闭）。关闭主窗口后先收起到托盘并开始计时；重新打开窗口会取消计时。需要系统托盘宿主；没有托盘时不会自动隐藏并销毁唯一的操作入口。
 
 进入轻量模式会销毁原生主窗口、编辑控件、主题库及缩略图，释放 UI 绘制资源。采集、当前主题的离屏绘制和串口发送独立运行，保留主题方向、亮度、镜像与发送 / 暂停状态；没有连接设备或发送已暂停时不再执行无用的采集与渲染。只为当前主题保留需要的天气和音量服务。托盘仍可暂停 / 继续发送、恢复窗口和退出。
+
+托盘中的「轻量模式 / Lightweight mode」与「发送数据 / Send data」使用带勾选状态的开关：勾选轻量模式释放界面，取消勾选恢复窗口；勾选发送数据开始推送，取消勾选暂停。状态与主界面同步，设备未连接时发送开关禁用，断开后自动取消勾选。
 
 未保存的草稿、撤销 / 重做、选择和编辑状态会先暂存到数据目录的私有临时文件，恢复窗口时载入并删除该临时文件；不会自动覆盖主题源文件。暂存失败则保留编辑界面。此临时文件用于同一进程内恢复，不能替代保存主题。
 

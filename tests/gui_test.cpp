@@ -17,6 +17,19 @@ public:
             throw std::runtime_error("Cannot create offline test profile");
     }
 };
+class TestStartupBackend : public StartupBackend {
+public:
+    bool enabled = true;
+    QString failure;
+    int writes = 0;
+    StartupState inspect() override { return {enabled, true, {}}; }
+    StartupState setEnabled(bool value) override {
+        ++writes;
+        if (!failure.isEmpty()) return {enabled, true, failure};
+        enabled = value;
+        return inspect();
+    }
+};
 static QPoint canvasPoint(const Canvas &canvas, QPointF logical) {
     if (canvas.mirrored)
         logical.setX(canvas.theme->size().width() - logical.x());
@@ -35,6 +48,101 @@ static void dragCanvas(Canvas &canvas, QPointF from, QPointF to,
 class GuiTest : public QObject {
     Q_OBJECT
 private slots:
+    void trayLightweightToggleRestoresWindowAndReflectsFailures() {
+        TestProfile dir;
+        ApplicationController app(dir.path(), {}, [] { return true; });
+        app.showWindow();
+        auto *light = app.menu->findChild<QAction *>("lightweightModeAction");
+        auto *send = app.menu->findChild<QAction *>("sendDataAction");
+        QVERIFY(light && send);
+        QVERIFY(light->isCheckable());
+        QVERIFY(send->isCheckable());
+        QVERIFY(!light->isChecked());
+        QVERIFY(!send->isChecked());
+        QVERIFY(!send->isEnabled());
+        light->trigger();
+        QTRY_VERIFY(app.isLightweight());
+        QVERIFY(light->isChecked());
+        QVERIFY(light->isEnabled());
+        QCOMPARE(app.menu->findChild<QAction *>("lightweightModeAction"), light);
+        light->trigger();
+        QTRY_VERIFY(!app.isLightweight());
+        QVERIFY(app.window()->isVisible());
+        QVERIFY(!light->isChecked());
+        app.display().dataDir = dir.path() + "/missing/directory";
+        light->trigger();
+        QTRY_VERIFY(!light->isChecked());
+        QVERIFY(!app.isLightweight());
+        QVERIFY(app.window()->isVisible());
+        app.display().dataDir = dir.path();
+    }
+    void traySendingToggleTracksWindowControlsAndDisconnects() {
+#ifdef Q_OS_WIN
+        QSKIP("Serial state integration uses a POSIX PTY; checkable light mode runs on both platforms");
+#else
+        TestProfile dir;
+        PseudoScreen screen;
+        ApplicationController app(dir.path(), {}, [] { return true; });
+        app.showWindow();
+        auto *send = app.menu->findChild<QAction *>("sendDataAction");
+        auto &runtime = app.display();
+        runtime.sampling.stop();
+        runtime.device.connectPort(screen.port, runtime.theme.orientation(), 75, false);
+        QTRY_VERIFY(send->isEnabled());
+        QVERIFY(!send->isChecked());
+        send->trigger();
+        QVERIFY(runtime.sending);
+        QVERIFY(send->isChecked());
+        app.window()->toggleSend();
+        QVERIFY(!send->isChecked());
+        app.window()->toggleSend();
+        QVERIFY(send->isChecked());
+        QVERIFY(app.enterLightweight());
+        QVERIFY(send->isChecked());
+        send->trigger();
+        QVERIFY(!runtime.sending);
+        QVERIFY(!send->isChecked());
+        send->trigger();
+        QVERIFY(runtime.sending);
+        QVERIFY(send->isChecked());
+        runtime.device.disconnectPort();
+        QTRY_VERIFY(!send->isEnabled());
+        QVERIFY(!send->isChecked()); // Works even when background sampling is paused.
+#endif
+    }
+    void startupToggleReadsSystemStateAndRevertsOnFailure() {
+        TestProfile dir;
+        auto backend = std::make_shared<TestStartupBackend>();
+        {
+            MainWindow w(dir.path(), {}, nullptr, backend);
+            w.show();
+            QVERIFY(!w.startup->ready()); // No background polling before Settings is opened.
+            w.setPage(2);
+            QTRY_VERIFY(w.startup->ready() && !w.startup->busy());
+            QVERIFY(w.startupToggle->isChecked());
+            QVERIFY(w.startupToggle->isEnabled());
+            QCOMPARE(backend->writes, 0);
+            QTest::mouseClick(w.startupToggle, Qt::LeftButton, Qt::NoModifier, QPoint(8, w.startupToggle->height() / 2));
+            QTRY_VERIFY(!w.startup->busy());
+            QVERIFY(!w.startupToggle->isChecked());
+            QCOMPARE(backend->writes, 1);
+            backend->failure = "Permission denied for test entry";
+            QTest::mouseClick(w.startupToggle, Qt::LeftButton, Qt::NoModifier, QPoint(8, w.startupToggle->height() / 2));
+            QTRY_VERIFY(!w.startup->busy());
+            QVERIFY(!w.startupToggle->isChecked());
+            QVERIFY(w.startupStatus->text().contains("Permission denied"));
+            backend->failure.clear();
+        }
+        MainWindow reopened(dir.path(), {}, nullptr, backend);
+        reopened.setPage(2);
+        QTRY_VERIFY(reopened.startup->ready() && !reopened.startup->busy());
+        QVERIFY(!reopened.startupToggle->isChecked());
+        backend->enabled = true; // Simulate an external change in OS startup settings.
+        reopened.setPage(0);
+        reopened.setPage(2);
+        QTRY_VERIFY(!reopened.startup->busy());
+        QVERIFY(reopened.startupToggle->isChecked());
+    }
     void lightweightPreservesDocumentsAndDestroysWindow() {
         TestProfile dir;
         ApplicationController app(dir.path(), {}, [] { return true; });

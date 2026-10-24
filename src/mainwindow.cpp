@@ -83,9 +83,9 @@ protected:
         e->acceptProposedAction();
     }
 };
-MainWindow::MainWindow(QString dir, QString initial, QWidget *parent)
-    : MainWindow(std::make_shared<DisplayRuntime>(std::move(dir), initial), parent) {}
-MainWindow::MainWindow(std::shared_ptr<DisplayRuntime> session, QWidget *parent)
+MainWindow::MainWindow(QString dir, QString initial, QWidget *parent, std::shared_ptr<StartupBackend> startupBackend)
+    : MainWindow(std::make_shared<DisplayRuntime>(std::move(dir), initial), parent, std::move(startupBackend)) {}
+MainWindow::MainWindow(std::shared_ptr<DisplayRuntime> session, QWidget *parent, std::shared_ptr<StartupBackend> startupBackend)
     : QMainWindow(parent), runtime(std::move(session)), theme(runtime->theme), sample(runtime->sample),
       dataDir(runtime->dataDir), config(runtime->config), path(runtime->path), sending(runtime->sending),
       renderer(runtime->renderer), collector(runtime->collector), device(runtime->device),
@@ -95,6 +95,8 @@ MainWindow::MainWindow(std::shared_ptr<DisplayRuntime> session, QWidget *parent)
               (config.value("language").toString("auto") == "auto" &&
                QLocale::system().language() != QLocale::Chinese);
     paletteName = config.value("palette").toString("graphite");
+    startup = std::make_unique<StartupController>(startupBackend ? std::move(startupBackend) : nativeStartupBackend(dataDir));
+    connect(startup.get(), &StartupController::changed, this, &MainWindow::updateStartupUi);
     saved = theme.data;
     reloadLibrary();
     if (!path.isEmpty()) includeTheme(path);
@@ -150,7 +152,7 @@ void MainWindow::applyPalette() {
     setPalette(pal);
     setStyleSheet(
         QString(
-            "QWidget{font-size:14px;color:%1;}QMainWindow,QWidget#root{background:%2;}QFrame#panel{"
+            "QWidget{font-size:14px;color:%1;}QMainWindow,QWidget#root,QWidget#settingsContent{background:%2;}QFrame#panel{"
             "background:%3;border:1px solid "
             "%4;border-radius:8px;}QPushButton,QToolButton,QComboBox,QLineEdit,QSpinBox{min-height:28px;"
             "padding:3px 8px;border:1px solid "
@@ -691,7 +693,16 @@ void MainWindow::buildSensors(QWidget *w) {
     l->addWidget(sensorTable, 1);
 }
 void MainWindow::buildSettings(QWidget *w) {
-    auto outer = new QVBoxLayout(w);
+    auto pageLayout = new QVBoxLayout(w);
+    pageLayout->setContentsMargins(0, 0, 0, 0);
+    auto scroll = new QScrollArea;
+    scroll->setWidgetResizable(true);
+    scroll->setFrameShape(QFrame::NoFrame);
+    auto content = new QWidget;
+    content->setObjectName("settingsContent");
+    auto outer = new QVBoxLayout(content);
+    scroll->setWidget(content);
+    pageLayout->addWidget(scroll);
     label(L("设置", "Settings"), outer, "heading");
     auto group = new QGroupBox(L("界面与运行", "Appearance and behavior"));
     auto form = new QFormLayout(group);
@@ -736,6 +747,15 @@ void MainWindow::buildSettings(QWidget *w) {
         sampling.setInterval(n);
         persist();
     });
+    startupToggle = new QCheckBox(L("开机启动（登录后）", "Start at sign-in"));
+    startupToggle->setObjectName("startupEnabled");
+    form->addRow(startupToggle);
+    startupStatus = new QLabel;
+    startupStatus->setObjectName("startupStatus");
+    startupStatus->setWordWrap(true);
+    form->addRow(startupStatus);
+    updateStartupUi();
+    connect(startupToggle, &QCheckBox::clicked, this, [this](bool enabled) { startup->setEnabled(enabled); });
     auto closeTray = new QCheckBox(L("关闭窗口时最小化到托盘", "Close window to tray"));
     closeTray->setChecked(config["minimize_to_tray"].toBool());
     form->addRow(closeTray);
@@ -827,6 +847,21 @@ void MainWindow::buildSettings(QWidget *w) {
     });
     outer->addLayout(buttons);
 }
+void MainWindow::updateStartupUi() {
+    if (!startupToggle || !startupStatus) return;
+    const QSignalBlocker blocker(startupToggle);
+    const auto &state = startup->state();
+    startupToggle->setChecked(state.enabled);
+    startupToggle->setEnabled(startup->ready() && !startup->busy() && state.available);
+    if (startup->busy() || !startup->ready())
+        startupStatus->setText(L("正在检查或更新启动设置…", "Checking or updating startup settings…"));
+    else if (!state.error.isEmpty())
+        startupStatus->setText(L("启动设置：", "Startup: ") + state.error);
+    else
+        startupStatus->setText(state.enabled
+            ? L("已启用，下次登录后自动启动。", "Enabled. Starts automatically at your next sign-in.")
+            : L("已关闭，不影响当前运行和副屏发送。", "Disabled. The current session and display updates continue."));
+}
 void MainWindow::configureWeather() {
     const auto options = theme.data.value("weather").toObject();
     const bool enabled = config["weather_enabled"].toBool(options["enabled"].toBool());
@@ -861,6 +896,7 @@ void MainWindow::setPage(int n) {
     page = n;
     runtime->preview = isVisible() && page == 0;
     pages->setCurrentIndex(n);
+    if (n == 2) startup->refresh();
     if (n == 1)
         tick();
     if (n == 3)

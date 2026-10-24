@@ -24,6 +24,7 @@ struct DeviceStatus {
     quint64 frames = 0, bytes = 0;
 };
 class Device : public QThread {
+    Q_OBJECT
 public:
     Device();
     ~Device() override;
@@ -33,6 +34,8 @@ public:
     void command(int kind, int value = 0);
     void submit(const QImage &image);
     DeviceStatus status();
+signals:
+    void statusChanged();
 
 protected:
     void run() override;
