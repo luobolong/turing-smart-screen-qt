@@ -77,7 +77,6 @@ private:
     bool &sending;
     std::function<bool()> trayAvailable = QSystemTrayIcon::isSystemTrayAvailable;
     int page = 0;
-    QString paletteName = "graphite";
     QVector<Entry> entries;
     QHash<QString, Document> drafts;
     QList<QJsonObject> undoHistory, redoHistory;
@@ -118,7 +117,6 @@ private:
     int workflowEdits = 0, workflowSwitches = 0;
     QString L(const char *zh, const char *en) const;
     void build();
-    void applyPalette();
     void buildThemePage(QWidget *page);
     void buildSensors(QWidget *page);
     void buildSettings(QWidget *page);

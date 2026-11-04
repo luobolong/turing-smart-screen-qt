@@ -5,7 +5,7 @@
 #endif
 namespace Screen {
 ApplicationController::ApplicationController(QString directory, const QString &theme,
-                                             std::function<bool()> available)
+                                             std::function<bool()> available, bool startLightweight)
     : runtime(std::make_shared<DisplayRuntime>(std::move(directory), theme)),
       tray(new QSystemTrayIcon(this)), trayAvailable(std::move(available)) {
     qApp->setQuitOnLastWindowClosed(false);
@@ -24,7 +24,10 @@ ApplicationController::ApplicationController(QString directory, const QString &t
     });
     connect(runtime.get(), &DisplayRuntime::updated, this, &ApplicationController::updateTrayState);
     connect(&runtime->device, &Device::statusChanged, this, &ApplicationController::updateTrayState, Qt::QueuedConnection);
-    makeWindow();
+    if (startLightweight && trayAvailable())
+        runtime->setLightweight(true);
+    else
+        makeWindow();
     makeTray();
 }
 ApplicationController::~ApplicationController() {
@@ -76,7 +79,6 @@ void ApplicationController::makeTray() {
         quitAction = menu->addAction(QString(), this, &ApplicationController::quit);
         tray->setContextMenu(menu.get());
     }
-    if (editor) menu->setPalette(editor->palette());
     showAction->setText(L("显示窗口", "Show window"));
     lightAction->setText(L("轻量模式", "Lightweight mode"));
     sendAction->setText(L("发送数据", "Send data"));

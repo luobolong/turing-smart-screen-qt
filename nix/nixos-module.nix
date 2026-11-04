@@ -51,7 +51,11 @@ in
       serviceConfig = {
         Type = "exec";
         ExecStart = utils.escapeSystemdExecArgs (
-          [ (lib.getExe' cfg.package "turing-screen-qt") ] ++ cfg.extraArgs
+          [
+            (lib.getExe' cfg.package "turing-screen-qt")
+            "--autostart"
+          ]
+          ++ cfg.extraArgs
         );
         Restart = "on-failure";
         RestartSec = "5s";

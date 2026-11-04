@@ -23,10 +23,8 @@ static QPushButton *button(const QString &text, QLayout *layout, const std::func
     QObject::connect(b, &QPushButton::clicked, b, fn);
     return b;
 }
-static QLabel *label(const QString &text, QLayout *layout, const char *object = {}) {
+static QLabel *label(const QString &text, QLayout *layout) {
     auto l = new QLabel(text);
-    if (object)
-        l->setObjectName(object);
     layout->addWidget(l);
     return l;
 }
@@ -94,7 +92,6 @@ MainWindow::MainWindow(std::shared_ptr<DisplayRuntime> session, QWidget *parent,
     english = config.value("language").toString("auto") == "english" ||
               (config.value("language").toString("auto") == "auto" &&
                QLocale::system().language() != QLocale::Chinese);
-    paletteName = config.value("palette").toString("graphite");
     startup = std::make_unique<StartupController>(startupBackend ? std::move(startupBackend) : nativeStartupBackend(dataDir));
     connect(startup.get(), &StartupController::changed, this, &MainWindow::updateStartupUi);
     saved = theme.data;
@@ -125,56 +122,6 @@ void MainWindow::hideEvent(QHideEvent *event) {
     QMainWindow::hideEvent(event);
     runtime->preview = false;
 }
-void MainWindow::applyPalette() {
-    bool light = paletteName == "light";
-    QString bg = light                       ? "#eef1f5"
-                 : paletteName == "midnight" ? "#151321"
-                 : paletteName == "forest"   ? "#101b18"
-                                             : "#11161e";
-    QString card = light                       ? "#ffffff"
-                   : paletteName == "midnight" ? "#211e30"
-                   : paletteName == "forest"   ? "#1b2b25"
-                                               : "#1c242e";
-    QString text = light ? "#172337" : "#e7edf5", muted = light ? "#526073" : "#a9b8ca",
-            line = light ? "#c9d2de" : "#344150", control = light ? "#f3f6fa" : "#25313d";
-    QPalette pal;
-    pal.setColor(QPalette::Window, QColor(bg));
-    pal.setColor(QPalette::Base, QColor(card));
-    pal.setColor(QPalette::Text, QColor(text));
-    pal.setColor(QPalette::WindowText, QColor(text));
-    pal.setColor(QPalette::Button, QColor(control));
-    pal.setColor(QPalette::ButtonText, QColor(text));
-    pal.setColor(QPalette::Highlight, QColor("#2e68b1"));
-    pal.setColor(QPalette::HighlightedText, Qt::white);
-    pal.setColor(QPalette::ToolTipBase, QColor(card));
-    pal.setColor(QPalette::ToolTipText, QColor(text));
-    pal.setColor(QPalette::Disabled, QPalette::Text, QColor(muted));
-    setPalette(pal);
-    setStyleSheet(
-        QString(
-            "QWidget{font-size:14px;color:%1;}QMainWindow,QWidget#root,QWidget#settingsContent{background:%2;}QFrame#panel{"
-            "background:%3;border:1px solid "
-            "%4;border-radius:8px;}QPushButton,QToolButton,QComboBox,QLineEdit,QSpinBox{min-height:28px;"
-            "padding:3px 8px;border:1px solid "
-            "%4;border-radius:4px;background:%5;}QPushButton:hover,QToolButton:hover{border-color:#5598ff;}"
-            "QPushButton:disabled{color:%6;}QPushButton#primary{background:#2878f0;color:white;border-color:#"
-            "2878f0;}QPushButton#primary:disabled{background:#293c54;color:#8995a6;border-color:#344150;}"
-            "QLineEdit:focus{border-color:#438af4;}QLabel#heading{font-size:23px;font-weight:600;}QLabel#"
-            "muted{color:%6;}QTabBar::tab{padding:12px 24px;border-bottom:2px solid "
-            "transparent;}QTabBar::tab:selected{color:#5598ff;border-bottom:2px solid "
-            "#438af4;}QTreeWidget,QListWidget,QTableWidget,QPlainTextEdit{border:1px solid "
-            "%4;border-radius:4px;background:%3;selection-background-color:#294e7b;}QTreeWidget::item{height:"
-            "30px;}QListWidget::item{padding:8px;}QListWidget::item:selected{background:#294e7b;border-left:"
-            "3px solid "
-            "#438af4;}QHeaderView::section{background:%5;padding:6px;border:0;}QGroupBox{border:1px solid "
-            "%4;border-radius:6px;margin-top:16px;padding:16px;}QGroupBox::title{subcontrol-origin:margin;"
-            "left:12px;}QScrollBar:vertical{width:10px;background:%2;}QScrollBar::handle:vertical{background:"
-            "%4;min-height:24px;border-radius:4px;}QStatusBar{border-top:1px solid "
-            "%4;}QMenu{background:%3;border:1px solid %4;}QMenu::item{padding:7px "
-            "24px;}QMenu::item:selected{background:#294e7b;}QToolTip{background:%3;color:%1;border:1px solid "
-            "%4;}")
-            .arg(text, bg, card, line, control, muted));
-}
 void MainWindow::build() {
     building = true;
     auto old = takeCentralWidget();
@@ -186,7 +133,7 @@ void MainWindow::build() {
     outer->setContentsMargins(12, 8, 12, 0);
     outer->setSpacing(8);
     auto header = new QHBoxLayout;
-    label("Turing Screen", header, "heading");
+    label("Turing Screen", header);
     header->addSpacing(24);
     navigation = new QTabBar;
     for (auto t :
@@ -273,7 +220,6 @@ void MainWindow::build() {
         if (page == 0)
             createLayer("text");
     });
-    applyPalette();
     buildLibrary();
     buildTree();
     emit preferencesChanged();
@@ -287,8 +233,9 @@ void MainWindow::buildThemePage(QWidget *w) {
     layout->setContentsMargins(0, 0, 0, 0);
     auto splitter = new QSplitter;
     layout->addWidget(splitter);
-    left = new QFrame;
-    left->setObjectName("panel");
+    auto leftPanel = new QFrame;
+    leftPanel->setFrameShape(QFrame::StyledPanel);
+    left = leftPanel;
     auto lv = new QVBoxLayout(left);
     lv->setContentsMargins(12, 16, 12, 12);
     auto lt = new QHBoxLayout;
@@ -420,10 +367,10 @@ void MainWindow::buildThemePage(QWidget *w) {
     cv->setContentsMargins(16, 16, 16, 8);
     auto heading = new QHBoxLayout;
     auto text = new QVBoxLayout;
-    title = label(theme.name(), text, "heading");
+    title = label(theme.name(), text);
     title->setMinimumWidth(120);
     title->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
-    resolution = label({}, text, "muted");
+    resolution = label({}, text);
     heading->addLayout(text, 1);
     modeButton = button({}, heading, [this] { setEditing(!editing); });
     auto themeOptions = button(L("主题选项", "Theme options"), heading, [] {});
@@ -449,7 +396,6 @@ void MainWindow::buildThemePage(QWidget *w) {
     deleteThemeAction = themeMenu->addAction(L("删除主题", "Delete theme"), this, [this] { deleteTheme(path); });
     themeMenu->addAction(L("恢复内置主题", "Restore built-in themes"), this, &MainWindow::restoreBuiltinThemes);
     sendButton = button({}, heading, [this] { toggleSend(); });
-    sendButton->setObjectName("primary");
     cv->addLayout(heading);
     auto tools = new QHBoxLayout;
     undoButton = button(L("撤销", "Undo"), tools, [this] { undo(); });
@@ -494,7 +440,7 @@ void MainWindow::buildThemePage(QWidget *w) {
     options->addWidget(snap);
     connect(snap, &QCheckBox::toggled, this, [this](bool v) { canvas->snap = v; });
     options->addStretch();
-    label(L("预览与副屏使用相同像素", "Preview and device share the same pixels"), options, "muted");
+    label(L("预览与副屏使用相同像素", "Preview and device share the same pixels"), options);
     cv->addLayout(options);
     splitter->addWidget(center);
     connect(canvas, &Canvas::selectionChanged, this, [this] {
@@ -514,16 +460,16 @@ void MainWindow::buildThemePage(QWidget *w) {
     connect(canvas, &Canvas::committed, this, &MainWindow::remember);
     connect(canvas, &Canvas::createRequested, this, &MainWindow::createLayer);
     connect(canvas, &Canvas::contextRequested, this, &MainWindow::contextMenu);
-    right = new QFrame;
-    right->setObjectName("panel");
+    auto rightPanel = new QFrame;
+    rightPanel->setFrameShape(QFrame::StyledPanel);
+    right = rightPanel;
     auto rv = new QVBoxLayout(right);
     rv->setContentsMargins(16, 16, 16, 16);
-    label(L("设备", "Device"), rv, "heading");
+    label(L("设备", "Device"), rv);
     portBox = new QComboBox;
     rv->addWidget(portBox);
     auto connectionButtons = new QHBoxLayout;
     connectButton = button({}, connectionButtons, [this] { connectDevice(); });
-    connectButton->setObjectName("primary");
     button(L("刷新", "Refresh"), connectionButtons, [this] { refreshPorts(); });
     rv->addLayout(connectionButtons);
     auto form = new QFormLayout;
@@ -583,7 +529,7 @@ void MainWindow::buildThemePage(QWidget *w) {
     auto separator = new QFrame;
     separator->setFrameShape(QFrame::HLine);
     rv->addWidget(separator);
-    label(L("图层属性", "Layer properties"), rv, "heading");
+    label(L("图层属性", "Layer properties"), rv);
     auto props = new QFormLayout;
     layerName = new QLineEdit;
     layerText = new QLineEdit;
@@ -681,11 +627,11 @@ void MainWindow::buildThemePage(QWidget *w) {
 }
 void MainWindow::buildSensors(QWidget *w) {
     auto l = new QVBoxLayout(w);
-    label(L("本机传感器", "Local sensors"), l, "heading");
+    label(L("本机传感器", "Local sensors"), l);
     label(L("默认每秒采集并更新副屏。内存已用、可用、总量以 GB 显示；无法读取的项目会在来源栏说明原因。",
             "Samples and updates the display every second by default. Used, available and total RAM are shown in GB. "
             "Unavailable sensors show a reason in the source column."),
-          l, "muted");
+          l);
     sensorTable = new QTableWidget(0, 3);
     sensorTable->setHorizontalHeaderLabels({L("项目", "Metric"), L("数值", "Value"), L("来源 / 状态", "Source / status")});
     sensorTable->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
@@ -703,8 +649,8 @@ void MainWindow::buildSettings(QWidget *w) {
     auto outer = new QVBoxLayout(content);
     scroll->setWidget(content);
     pageLayout->addWidget(scroll);
-    label(L("设置", "Settings"), outer, "heading");
-    auto group = new QGroupBox(L("界面与运行", "Appearance and behavior"));
+    label(L("设置", "Settings"), outer);
+    auto group = new QGroupBox(L("运行设置", "Behavior"));
     auto form = new QFormLayout(group);
     auto language = new QComboBox;
     language->addItem("自动 / System", "auto");
@@ -722,20 +668,6 @@ void MainWindow::buildSettings(QWidget *w) {
             render();
         });
     });
-    auto palette = new QComboBox;
-    for (auto p : QList<QPair<QString, QString>>{{"graphite", L("石墨深色", "Graphite")},
-                                                 {"light", L("浅色", "Light")},
-                                                 {"midnight", L("午夜紫", "Midnight")},
-                                                 {"forest", L("森林绿", "Forest")}})
-        palette->addItem(p.second, p.first);
-    palette->setCurrentIndex(qMax(0, palette->findData(paletteName)));
-    form->addRow(L("界面配色", "Palette"), palette);
-    connect(palette, &QComboBox::currentIndexChanged, this, [this, palette] {
-        paletteName = palette->currentData().toString();
-        config["palette"] = paletteName;
-        applyPalette();
-        persist();
-    });
     auto interval = new QSpinBox;
     interval->setRange(1000, 10000);
     interval->setSingleStep(500);
@@ -747,7 +679,7 @@ void MainWindow::buildSettings(QWidget *w) {
         sampling.setInterval(n);
         persist();
     });
-    startupToggle = new QCheckBox(L("开机启动（登录后）", "Start at sign-in"));
+    startupToggle = new QCheckBox(L("开机启动（轻量模式）", "Start at sign-in in lightweight mode"));
     startupToggle->setObjectName("startupEnabled");
     form->addRow(startupToggle);
     startupStatus = new QLabel;
@@ -829,7 +761,7 @@ void MainWindow::buildSettings(QWidget *w) {
     label(L("原生界面，按需绘制；无浏览器、无动画循环。天气可按需开启；音量异步采集。",
             "Native interface with on-demand painting, no browser or animation loop. Weather is optional; "
             "audio queries run asynchronously."),
-          outer, "muted");
+          outer);
     outer->addStretch();
     auto buttons = new QHBoxLayout;
     button(L("打开数据目录", "Open data folder"), buttons,
@@ -859,7 +791,8 @@ void MainWindow::updateStartupUi() {
         startupStatus->setText(L("启动设置：", "Startup: ") + state.error);
     else
         startupStatus->setText(state.enabled
-            ? L("已启用，下次登录后自动启动。", "Enabled. Starts automatically at your next sign-in.")
+            ? L("已启用，下次登录后直接进入轻量模式，点击托盘图标打开窗口。",
+                "Enabled. Starts in lightweight mode at your next sign-in. Click the tray icon to open the window.")
             : L("已关闭，不影响当前运行和副屏发送。", "Disabled. The current session and display updates continue."));
 }
 void MainWindow::configureWeather() {
@@ -880,7 +813,7 @@ void MainWindow::configureWeather() {
 }
 void MainWindow::buildDiagnostics(QWidget *w) {
     auto l = new QVBoxLayout(w);
-    label(L("诊断", "Diagnostics"), l, "heading");
+    label(L("诊断", "Diagnostics"), l);
     diagnosticText = new QPlainTextEdit;
     diagnosticText->setReadOnly(true);
     l->addWidget(diagnosticText, 1);
@@ -2028,20 +1961,15 @@ void MainWindow::runSmoke(const QString &dir, bool stress, int seconds) {
                 workloadStage = "steady";
             }
         } else {
-            static const char *names[]{"preview",     "editor", "sensors", "settings",
-                                       "diagnostics", "light",  "english"};
-            if (n < 7) {
+            static const char *names[]{"preview", "editor", "sensors", "settings", "diagnostics", "english"};
+            if (n < 6) {
                 if (n == 1)
                     setEditing(true);
                 if (n >= 2 && n <= 4) {
                     navigation->setCurrentIndex(n - 1);
                 }
                 if (n == 5) {
-                    paletteName = "light";
-                    applyPalette();
                     navigation->setCurrentIndex(0);
-                }
-                if (n == 6) {
                     english = true;
                     build();
                     render();

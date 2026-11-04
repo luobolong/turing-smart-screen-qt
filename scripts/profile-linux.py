@@ -71,11 +71,11 @@ def run_case(args, name, mode="window", scenario="preview", theme="nightfall", *
     environment = os.environ.copy()
     environment["QT_QPA_PLATFORM"] = platform
     environment["TURING_QT_TRACE"] = str(destination / "startup.jsonl")
-    # Keep the tested Qt version's plugins; application style stays Fusion.
-    environment["QT_PLUGIN_PATH"] = args.qt_plugins
+    # Keep the tested Qt's plugins and the desktop's style/platform theme plugins.
+    environment["QT_PLUGIN_PATH"] = os.pathsep.join(filter(None, [args.qt_plugins, environment.get("QT_PLUGIN_PATH")]))
     if scale_factor is not None:
         environment["QT_SCALE_FACTOR"] = str(scale_factor)
-    if not args.inherit_qt_theme:
+    if args.clean_qt_theme:
         environment.pop("QT_QPA_PLATFORMTHEME", None)
         environment.pop("QT_STYLE_OVERRIDE", None)
     (destination / "command.json").write_text(json.dumps(command, ensure_ascii=False, indent=2))
@@ -152,7 +152,7 @@ def main():
     parser.add_argument("--platform", default="wayland" if os.environ.get("WAYLAND_DISPLAY") else
                         "xcb" if os.environ.get("DISPLAY") else "offscreen")
     parser.add_argument("--qt-plugins", help="Override the linked Qt's plugin directory")
-    parser.add_argument("--inherit-qt-theme", action="store_true")
+    parser.add_argument("--clean-qt-theme", action="store_true", help="Ignore desktop Qt theme overrides for this measurement")
     parser.add_argument("--scale-factor", type=float, help="Multiply the platform's display scale (0.5 turns 2x into 1x)")
     parser.add_argument("--case", default="all")
     parser.add_argument("--theme", default="nightfall")
@@ -203,7 +203,6 @@ def main():
         ("frozen", {"scenario": "frozen"}),
         ("render_only", {"scenario": "render-only"}),
         ("empty", {"scenario": "empty"}),
-        ("light", {"palette": "light"}),
         ("chinese", {"language": "chinese"}),
         ("weather", {"weather": True}),
         ("switch", {"scenario": "switch"}),

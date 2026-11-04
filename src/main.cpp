@@ -27,11 +27,7 @@ int main(int argc, char **argv) {
     QCoreApplication::setApplicationName("TuringScreenQt");
     QGuiApplication::setApplicationDisplayName("Turing Screen");
     QCoreApplication::setApplicationVersion(SCREEN_VERSION);
-    app.setStyle("Fusion");
-    QFont uiFont(Screen::screenFontFamily());
-    uiFont.setPixelSize(14);
-    uiFont.setStyleStrategy(QFont::StyleStrategy(QFont::NoFontMerging | QFont::PreferAntialias));
-    app.setFont(uiFont);
+    // Keep the platform's style, palette and font, including Qt style plugins.
     Screen::resourceTrace("QApplication");
     QImageReader::setAllocationLimit(16);
     QCommandLineParser parser;
@@ -39,6 +35,7 @@ int main(int argc, char **argv) {
     parser.addHelpOption();
     parser.addOption({{"v", "version"}, "Show version"});
     parser.addOptions({{"data-dir", "Data directory", "directory"},
+                       {"autostart", "Start in lightweight mode with a tray icon"},
                        {"theme", "Theme to open", "file"},
                        {"render-theme", "Render a theme without showing a window", "file"},
                        {"check-theme", "Validate a theme", "file"},
@@ -110,9 +107,11 @@ int main(int argc, char **argv) {
         QString dir = parser.value("data-dir");
         if (dir.isEmpty())
             dir = QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation);
-        Screen::ApplicationController controller(dir, parser.value("theme"));
-        controller.showWindow();
-        Screen::resourceTrace("window shown");
+        Screen::ApplicationController controller(dir, parser.value("theme"),
+                                                QSystemTrayIcon::isSystemTrayAvailable, parser.isSet("autostart"));
+        if (!controller.isLightweight() || parser.isSet("smoke-test") || parser.isSet("stress-test"))
+            controller.showWindow();
+        Screen::resourceTrace(controller.isLightweight() ? "lightweight autostart" : "window shown");
         if (parser.isSet("smoke-test") || parser.isSet("stress-test")) {
             int seconds = qBound(5, parser.value("test-seconds").toInt(), 600);
             controller.window()->runSmoke(parser.value(parser.isSet("stress-test") ? "stress-test" : "smoke-test"),

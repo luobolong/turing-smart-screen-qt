@@ -3,6 +3,7 @@
 #include "pseudoscreen.h"
 #include <QJsonDocument>
 #include <QMouseEvent>
+#include <QScopeGuard>
 #include <QtTest>
 #include <QtWidgets>
 #include <algorithm>
@@ -48,6 +49,58 @@ static void dragCanvas(Canvas &canvas, QPointF from, QPointF to,
 class GuiTest : public QObject {
     Q_OBJECT
 private slots:
+    void autostartSkipsEditorAndRestoresFromTray() {
+        TestProfile dir;
+        const auto themePath = assets() + "/themes/nightfall.json";
+        {
+            QFile config(dir.path() + "/config.json");
+            QVERIFY(config.open(QIODevice::WriteOnly));
+            config.write(QJsonDocument(QJsonObject{
+                {"weather_enabled", false}, {"selected_theme", themePath},
+                {"auto_lightweight", false},
+                {"theme_orientations", QJsonObject{{themeOrientationKey(themePath), 3}}}}).toJson());
+        }
+        ApplicationController app(dir.path(), {}, [] { return true; }, true);
+        QVERIFY(app.isLightweight());
+        QVERIFY(!app.window());
+        QVERIFY(!app.suspended);
+        QVERIFY(!app.countdown.isActive());
+        QVERIFY(app.lightAction->isChecked());
+        QVERIFY(app.tray->isVisible());
+        auto &runtime = app.display();
+        QCOMPARE(runtime.path, themePath);
+        QCOMPARE(runtime.theme.orientation(), 3);
+        QVERIFY(runtime.sampling.isActive());
+        QVERIFY(!runtime.preview);
+        QVERIFY(runtime.frame.isNull());
+        QCOMPARE(runtime.renderedFrames, quint64(0));
+        QVERIFY(QDir(dir.path()).entryList({"lightweight-session-*"}, QDir::Files).isEmpty());
+        const auto theme = runtime.theme.data;
+        app.showAction->trigger();
+        QVERIFY(!app.isLightweight());
+        QVERIFY(app.window());
+        QVERIFY(app.window()->isVisible());
+        QVERIFY(!app.lightAction->isChecked());
+        QCOMPARE(runtime.theme.data, theme);
+        QCOMPARE(runtime.theme.orientation(), 3);
+        QVERIFY(!runtime.frame.isNull());
+        QVERIFY(!runtime.sample.timestamp.isEmpty());
+        QVERIFY(!app.window()->dirty);
+        app.lightAction->trigger();
+        QTRY_VERIFY(app.isLightweight());
+        QVERIFY(!app.window());
+    }
+    void autostartWithoutTrayKeepsWindowAvailable() {
+        TestProfile dir;
+        ApplicationController app(dir.path(), {}, [] { return false; }, true);
+        QVERIFY(!app.isLightweight());
+        QVERIFY(app.window());
+        app.showWindow();
+        QVERIFY(app.window()->isVisible());
+        QVERIFY(!app.lightAction->isChecked());
+        QVERIFY(!app.enterLightweight());
+        QVERIFY(app.window()->isVisible());
+    }
     void trayLightweightToggleRestoresWindowAndReflectsFailures() {
         TestProfile dir;
         ApplicationController app(dir.path(), {}, [] { return true; });
@@ -719,6 +772,72 @@ private slots:
         w.dirty = false;
         w.quitting = true;
     }
+    void nativeAppearanceFollowsQtSettings() {
+        TestProfile dir;
+        {
+            QFile file(dir.path() + "/config.json");
+            QVERIFY(file.open(QIODevice::WriteOnly));
+            file.write("{\"palette\":\"forest\",\"language\":\"english\",\"weather_enabled\":false}");
+        }
+        const auto previousPalette = QApplication::palette();
+        const auto previousFont = QApplication::font();
+        const auto restore = qScopeGuard([&] {
+            QApplication::setPalette(previousPalette);
+            QApplication::setFont(previousFont);
+        });
+        auto desktopPalette = previousPalette;
+        desktopPalette.setColor(QPalette::Window, QColor("#eadfc9"));
+        desktopPalette.setColor(QPalette::Highlight, QColor("#a34976"));
+        QApplication::setPalette(desktopPalette);
+        auto desktopFont = previousFont;
+        desktopFont.setPointSize(12);
+        QApplication::setFont(desktopFont);
+        const auto desktopStyle = QApplication::style();
+        ApplicationController app(dir.path(), {}, [] { return true; });
+        app.showWindow();
+        auto w = app.window();
+        w->sampling.stop();
+        QVERIFY(!w->config.contains("palette"));
+        const auto verifyAppearance = [&] {
+            QCoreApplication::processEvents();
+            QCOMPARE(QApplication::style(), desktopStyle);
+            const QList<QWidget *> widgets{w, w->root, w->title, w->navigation, w->library, w->tree,
+                                          w->portBox, w->connectButton, w->brightness, w->mirrorBox,
+                                          w->sensorTable, w->diagnosticText, w->canvas, app.menu.get()};
+            for (auto widget : widgets) {
+                QVERIFY(widget->styleSheet().isEmpty());
+                QCOMPARE(widget->style(), desktopStyle);
+                QVERIFY(!widget->testAttribute(Qt::WA_SetPalette));
+                QVERIFY(!widget->testAttribute(Qt::WA_SetFont));
+                QCOMPARE(widget->palette().color(QPalette::Window), desktopPalette.color(QPalette::Window));
+                QCOMPARE(widget->palette().color(QPalette::Highlight), desktopPalette.color(QPalette::Highlight));
+                QCOMPARE(widget->font(), QApplication::font(widget));
+            }
+            for (auto combo : w->findChildren<QComboBox *>()) {
+                QCOMPARE(combo->findData("graphite"), -1);
+                QCOMPARE(combo->findData("forest"), -1);
+            }
+            QCOMPARE(w->canvas->grab().toImage().pixelColor(0, 0), desktopPalette.color(QPalette::Window));
+        };
+        verifyAppearance();
+        const auto preview = w->frame;
+        desktopPalette.setColor(QPalette::Window, QColor("#252c35"));
+        desktopPalette.setColor(QPalette::Highlight, QColor("#8fbc70"));
+        QApplication::setPalette(desktopPalette);
+        desktopFont.setPointSize(14);
+        QApplication::setFont(desktopFont);
+        verifyAppearance();
+        w->english = false;
+        w->build();
+        w->render();
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        verifyAppearance();
+        QCOMPARE(w->frame, preview); // Desktop appearance must not alter the device's pixels.
+        w->persist();
+        QFile file(dir.path() + "/config.json");
+        QVERIFY(file.open(QIODevice::ReadOnly));
+        QVERIFY(!QJsonDocument::fromJson(file.readAll()).object().contains("palette"));
+    }
     void pageIsolationPreferencesAndGeometry() {
         TestProfile dir;
         {
@@ -736,7 +855,6 @@ private slots:
             w.config["minimize_to_tray"] = true;
             w.config["interval_ms"] = 3000;
             w.config["language"] = "english";
-            w.config["palette"] = "forest";
             w.persist();
             w.dirty = false;
             w.quitting = true;
@@ -745,7 +863,7 @@ private slots:
         QVERIFY(copy.config["minimize_to_tray"].toBool());
         QCOMPARE(copy.config["interval_ms"].toInt(), 3000);
         QVERIFY(copy.english);
-        QCOMPARE(copy.paletteName, QString("forest"));
+        QVERIFY(!copy.config.contains("palette"));
         copy.quitting = true;
     }
     void repeatedSamplingDoesNotMutateTheme() {

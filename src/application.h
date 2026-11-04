@@ -10,7 +10,8 @@ class ApplicationController : public QObject {
     friend class PerformanceProbe;
 public:
     ApplicationController(QString directory, const QString &theme = {},
-                          std::function<bool()> trayAvailable = QSystemTrayIcon::isSystemTrayAvailable);
+                          std::function<bool()> trayAvailable = QSystemTrayIcon::isSystemTrayAvailable,
+                          bool startLightweight = false);
     ~ApplicationController() override;
     MainWindow *window() const { return editor.get(); }
     DisplayRuntime &display() const { return *runtime; }

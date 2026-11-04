@@ -42,11 +42,13 @@ assert builtins.elem testPackage enabled.environment.systemPackages;
 assert service.wantedBy == [ "graphical-session.target" ];
 assert service.partOf == [ "graphical-session.target" ];
 assert service.serviceConfig.Type == "exec";
+assert lib.hasInfix "--autostart" service.serviceConfig.ExecStart;
 assert service.serviceConfig.Restart == "on-failure";
 assert customService.wantedBy == [ "turing-screen-test-session.target" ];
 assert builtins.elem "graphical-session.target" customService.partOf;
 assert builtins.elem "turing-screen-test-session.target" customService.partOf;
 assert lib.hasInfix ''"/tmp/theme 100%% $$example.json"'' customService.serviceConfig.ExecStart;
+assert lib.hasInfix "--autostart" customService.serviceConfig.ExecStart;
 pkgs.runCommand "turing-screen-nixos-module-check" { nativeBuildInputs = [ pkgs.systemd ]; } ''
   mkdir -p "$out/default" "$out/custom"
   cp ${unit.unit}/turing-screen.service "$out/default/"

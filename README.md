@@ -58,6 +58,14 @@ CPU / GPU 图标及标签在标题行左侧，固定型号 `AMD Ryzen 7 9800X3D`
 
 开发时可运行 `python3 scripts/generate-dashboard-theme.py` 重建主题。图标字体由 `scripts/generate-symbol-font.py` 从 JetBrainsMono Nerd Font 3.5 的指定字形裁剪、更名，Inter 字体由 `scripts/generate-latin-font.py` 从 Inter 4.1 裁剪、更名，时钟字体由 `scripts/generate-mono-font.py` 从 JetBrainsMono Nerd Font Bold 裁剪 ASCII 并更名；字体生成步骤需 fontTools，运行程序无需 Python。
 
+## 界面外观
+
+界面使用 Qt Widgets 原生控件，样式、颜色、字体和控件状态由 Qt 与桌面环境决定，应用内不再提供配色切换，也不覆盖系统样式表或调色板。旧配置中的 `palette` 字段会在读取时移除，下次保存设置时清理。
+
+Linux 沿用桌面已有的 Qt 6 设置，包括 Kvantum、qt6ct 和 KDE 的样式及字体配置；也可通过 `QT_STYLE_OVERRIDE`、`QT_QPA_PLATFORMTHEME` 和 `QT_PLUGIN_PATH` 指定。相应的 Qt 6 插件需在 Qt 的插件搜索路径中。便携包的 `run.sh` 保留已有 `QT_PLUGIN_PATH`，并在系统提供 Qt 6 的 `qtpaths6` 或 `qtpaths` 时追加其插件目录；Nix 包沿用 Qt 包装器和会话环境。应用不安装或修改桌面主题设置。
+
+预览画布外围、网格和选择标记跟随系统调色板；发送到副屏的主题内容、字体和像素由屏幕主题定义。
+
 ## 快捷键
 
 | 操作 | 快捷键 |
@@ -81,6 +89,8 @@ CPU / GPU 图标及标签在标题行左侧，固定型号 `AMD Ryzen 7 9800X3D`
 ./scripts/package-windows.ps1 -QtRoot C:/Qt/6.8.0/msvc2022_64
 ```
 
+Windows 分发应使用打包脚本生成的 `dist` 目录或 ZIP，包含 Qt DLL、平台与原生样式插件及 MSVC 运行库；仅复制编译得到的 EXE 无法在没有 Qt 环境的机器上运行。已有发布目录会被保留，可通过 `-Destination dist/自定义目录名` 生成新的完整包。
+
 ```sh
 ./scripts/build-linux.sh
 ./scripts/package-linux.sh
@@ -94,7 +104,9 @@ GitHub Actions 的 [Build and test](.github/workflows/ci.yml) 在 push、pull re
 
 ## 开机启动
 
-设置中的「开机启动（登录后） / Start at sign-in」读取系统中的持久启动状态，开启后在下次登录图形桌面时启动。开关异步更新，失败时显示原因并回读实际状态；关闭不会停止当前程序或中断副屏发送。不在每次程序启动时自动重写启动项。
+设置中的「开机启动（轻量模式） / Start at sign-in in lightweight mode」读取系统中的持久启动状态，开启后在下次登录图形桌面时直接进入轻量模式，只创建托盘和后台运行管线，不创建或闪现主窗口，也不等待关闭窗口的倒计时。点击托盘图标可恢复完整界面；没有可用系统托盘时会显示主窗口。手动打开程序仍显示正常界面。
+
+开关异步更新，失败时显示原因并回读实际状态；关闭不会停止当前程序或中断副屏发送。不在每次程序启动时自动重写启动项。旧版本已启用的启动项需关闭后重新开启一次，更新为携带 `--autostart` 参数的命令；NixOS 声明式服务在使用新版模块重建后更新。自定义启动命令也可添加 `--autostart`。
 
 - Windows：添加或移除当前用户 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` 下的 `TuringScreen` 项，无需管理员权限。命令保留当前数据目录，对含空格的路径转义；命令超过 Windows Run 的 260 字符限制时报告错误，不写入无效项目。实现依据 [Microsoft Run 启动项文档](https://learn.microsoft.com/en-us/windows/win32/setupapi/run-and-runonce-registry-keys)。
 - Linux：使用 `turing-screen.service` systemd 用户服务，在 `graphical-session.target` 启动，图形会话结束时停止。没有现有服务时写入 `$XDG_CONFIG_HOME/systemd/user/`（默认 `~/.config/systemd/user/`）；优先复用 NixOS 等已安装服务，避免重复启动。安装目录包含 `run.sh` 或 Nix Qt 包装器时使用对应启动入口。普通发行版需要 systemd 用户管理器，以及已向其导入图形会话环境的桌面。
@@ -169,7 +181,7 @@ journalctl --user -u turing-screen.service -b
 
 未保存的草稿、撤销 / 重做、选择和编辑状态会先暂存到数据目录的私有临时文件，恢复窗口时载入并删除该临时文件；不会自动覆盖主题源文件。暂存失败则保留编辑界面。此临时文件用于同一进程内恢复，不能替代保存主题。
 
-`scripts/verify-windows.ps1`、`scripts/verify-linux.sh` 启动原生窗口，采样 RSS 峰值和 CPU 时间，保存七种界面截图。加 `-Stress`（Linux 第三个参数 `--stress-test`）测试主题切换、图层创建、撤销、页面切换、托盘和退出。MB 为 1,000,000 字节，包含共享库常驻页；CPU 报告包含单核比例及按逻辑核数归一化的整机比例。资源采样计时器只在测试模式启用。
+`scripts/verify-windows.ps1`、`scripts/verify-linux.sh` 启动原生窗口，采样 RSS 峰值和 CPU 时间，保存六种界面截图。加 `-Stress`（Linux 第三个参数 `--stress-test`）测试主题切换、图层创建、撤销、页面切换、托盘和退出。MB 为 1,000,000 字节，包含共享库常驻页；CPU 报告包含单核比例及按逻辑核数归一化的整机比例。资源采样计时器只在测试模式启用。
 
 当前本机 Wayland / DPR 2 对照：完整界面约 133 MB RSS，轻量模式持续向模拟副屏推送时约 66 MB，开启天气约 79 MB；Nightfall 渲染耗时减少约 30%，复杂图片主题约 52%。条件、限制与原始数据见 [性能优化和轻量模式验证](docs/performance-optimization-2026-10-25.md)。100 MB 是随附主题和基本工作流的实测目标，并非任意巨大图片、显示缩放或系统字体后端的硬性上限；当前完整高 DPI 窗口超过该目标。实体副屏发送仍需实机验证。
 

@@ -33,8 +33,22 @@ cat > "$output/run.sh" <<'SH'
 #!/usr/bin/env sh
 set -eu
 app_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+export QT_PLUGIN_PATH="$app_dir/plugins${QT_PLUGIN_PATH:+:$QT_PLUGIN_PATH}"
+for qtpaths_command in qtpaths6 qtpaths; do
+    if command -v "$qtpaths_command" >/dev/null 2>&1; then
+        qt_version=$("$qtpaths_command" --qt-version 2>/dev/null || true)
+        case "$qt_version" in
+            6.*)
+                system_plugins=$("$qtpaths_command" --plugin-dir 2>/dev/null || true)
+                if [ -d "$system_plugins" ]; then
+                    export QT_PLUGIN_PATH="$QT_PLUGIN_PATH:$system_plugins"
+                fi
+                break
+                ;;
+        esac
+    fi
+done
 export LD_LIBRARY_PATH="$app_dir/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-export QT_PLUGIN_PATH="$app_dir/plugins"
 exec "$app_dir/turing-screen-qt" "$@"
 SH
 chmod +x "$output/run.sh" "$output/turing-screen-qt"

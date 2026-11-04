@@ -196,7 +196,7 @@ public:
             QDir().mkpath(data);
             write(data + "/config.json", {{"weather_enabled", weather}, {"weather_city", ""},
                                           {"language", parser.value("language")},
-                                          {"palette", parser.value("palette")}, {"interval_ms", 1000},
+                                          {"interval_ms", 1000},
                                           {"minimize_to_tray", false}});
             window = std::make_unique<MainWindow>(data, parser.value("theme"));
             window->setAttribute(Qt::WA_ShowWithoutActivating);
@@ -316,13 +316,8 @@ int main(int argc, char **argv) {
     }
     Screen::ProbeApplication app(argc, argv);
     app.setQuitOnLastWindowClosed(false);
-    app.setStyle("Fusion");
     QCoreApplication::setOrganizationName("TuringScreen");
     QCoreApplication::setApplicationName("TuringScreenPerformanceProbe");
-    QFont font(Screen::screenFontFamily());
-    font.setPixelSize(14);
-    font.setStyleStrategy(QFont::StyleStrategy(QFont::NoFontMerging | QFont::PreferAntialias));
-    app.setFont(font);
     Screen::resourceTrace("probe QApplication");
     QCommandLineParser parser;
     parser.addHelpOption();
@@ -332,7 +327,6 @@ int main(int argc, char **argv) {
                        {"output", "Report file", "file"}, {"data-dir", "Temporary profile", "directory"},
                        {"seconds", "Run duration", "seconds", "30"}, {"weather", "Enable IP weather"},
                        {"free-size", "Let the window manager choose the window size"},
-                       {"palette", "UI palette", "palette", "graphite"},
                        {"language", "UI language", "language", "english"},
                        {"factor", "Microbenchmark iteration multiplier", "factor", "1"},
                        {"port", "Explicit serial test port (session mode only)", "port"}});

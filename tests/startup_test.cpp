@@ -72,7 +72,7 @@ private slots:
         const auto settings = [path] { return std::make_unique<QSettings>(path, QSettings::IniFormat); };
         { auto store = settings(); store->setValue("OtherApp", "do not change"); }
         const auto command = windowsStartupCommand("C:\\Program Files\\Turing Screen\\app.exe", "C:\\Users\\User Name\\Data\\");
-        QCOMPARE(command, QString("\"C:\\Program Files\\Turing Screen\\app.exe\" --data-dir \"C:\\Users\\User Name\\Data\\\\\""));
+        QCOMPARE(command, QString("\"C:\\Program Files\\Turing Screen\\app.exe\" --autostart --data-dir \"C:\\Users\\User Name\\Data\\\\\""));
         WindowsStartupBackend first(command, settings);
         QVERIFY(!first.inspect().enabled);
         QVERIFY(first.setEnabled(true).error.isEmpty());
@@ -86,7 +86,7 @@ private slots:
         WindowsStartupBackend tooLong(QString(261, 'x'), settings);
         QVERIFY(!tooLong.setEnabled(true).error.isEmpty());
         QVERIFY(!first.inspect().enabled);
-        QCOMPARE(windowsStartupCommand("app.exe", "a\\\"b"), QString("\"app.exe\" --data-dir \"a\\\\\\\"b\""));
+        QCOMPARE(windowsStartupCommand("app.exe", "a\\\"b"), QString("\"app.exe\" --autostart --data-dir \"a\\\\\\\"b\""));
     }
     void systemdEnableDisableAndRollback() {
 #ifndef Q_OS_LINUX
@@ -103,7 +103,7 @@ private slots:
         const auto unit = file.readAll(); file.close();
         QVERIFY(unit.contains("Type=exec"));
         QVERIFY(unit.contains("WantedBy=graphical-session.target"));
-        QVERIFY(unit.contains("\"/tmp/app with spaces/run.sh\" --data-dir \"/tmp/data %% $$name\""));
+        QVERIFY(unit.contains("\"/tmp/app with spaces/run.sh\" --autostart --data-dir \"/tmp/data %% $$name\""));
         state = backend->setEnabled(false);
         QVERIFY2(state.error.isEmpty(), qPrintable(state.error));
         QVERIFY(!state.enabled);

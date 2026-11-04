@@ -25,6 +25,7 @@ DisplayRuntime::DisplayRuntime(QString directory, const QString &initialTheme)
     QDir().mkpath(dataDir + "/themes");
     QFile input(dataDir + "/config.json");
     if (input.open(QIODevice::ReadOnly)) config = QJsonDocument::fromJson(input.readAll()).object();
+    config.remove("palette"); // Retire the application palette preference from older versions.
     theme = Theme::starter();
     const auto selected = initialTheme.isEmpty() ? config["selected_theme"].toString() : initialTheme;
     const auto relative = QDir(assets()).relativeFilePath(QFileInfo(selected).absoluteFilePath());

@@ -28,7 +28,7 @@ static QString windowsQuote(const QString &text) {
     return result + QString(backslashes * 2, '\\') + '"';
 }
 QString windowsStartupCommand(const QString &executable, const QString &dataDirectory) {
-    return windowsQuote(executable) + " --data-dir " + windowsQuote(dataDirectory);
+    return windowsQuote(executable) + " --autostart --data-dir " + windowsQuote(dataDirectory);
 }
 static QString systemdQuote(QString text, bool executable = false) {
     validArgument(text);
@@ -47,7 +47,7 @@ QByteArray systemdStartupUnit(const QString &executable, const QString &dataDire
     return unitMarker + QString(
         "[Unit]\nDescription=Turing Screen smart display monitor\n"
         "After=graphical-session-pre.target\nPartOf=graphical-session.target\n\n"
-        "[Service]\nType=exec\nExecStart=%1 --data-dir %2\nRestart=on-failure\nRestartSec=5s\n"
+        "[Service]\nType=exec\nExecStart=%1 --autostart --data-dir %2\nRestart=on-failure\nRestartSec=5s\n"
         "TimeoutStopSec=10s\nSlice=app.slice\n\n[Install]\nWantedBy=graphical-session.target\n")
         .arg(systemdQuote(executable, true), systemdQuote(dataDirectory)).toUtf8();
 }

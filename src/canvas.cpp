@@ -54,7 +54,7 @@ QRectF Canvas::bounds(const QString &id) const {
 }
 void Canvas::paintEvent(QPaintEvent *) {
     QPainter p(this);
-    p.fillRect(rect(), QColor("#0c1117"));
+    p.fillRect(rect(), palette().brush(QPalette::Window));
     auto r = screenRect();
     p.fillRect(r, Qt::black);
     if (!frame.isNull()) {
@@ -65,7 +65,9 @@ void Canvas::paintEvent(QPaintEvent *) {
         return;
     double z = r.width() / theme->size().width();
     if (grid) {
-        p.setPen(QColor(180, 195, 210, 38));
+        auto gridColor = palette().color(QPalette::Mid);
+        gridColor.setAlpha(96);
+        p.setPen(gridColor);
         for (int x = 0; x <= theme->size().width(); x += 8)
             p.drawLine(QPointF(r.left() + x * z, r.top()), QPointF(r.left() + x * z, r.bottom()));
         for (int y = 0; y <= theme->size().height(); y += 8)
@@ -73,18 +75,20 @@ void Canvas::paintEvent(QPaintEvent *) {
     }
     for (auto id : selected) {
         auto b = bounds(id);
-        p.setPen(QPen(QColor("#388dff"), 1.4));
+        p.setPen(QPen(palette().brush(QPalette::Highlight), 1.4));
         p.setBrush(Qt::NoBrush);
         p.drawRect(b);
         if (!layerLocked(theme->layers(), id) && findLayer(theme->layers(), id)["kind"] != "group") {
-            p.setBrush(Qt::white);
+            p.setBrush(palette().brush(QPalette::HighlightedText));
             for (auto pt : {b.topLeft(), b.topRight(), b.bottomLeft(), b.bottomRight()})
                 p.drawRect(QRectF(pt - QPointF(3, 3), QSizeF(6, 6)));
         }
     }
     if (marquee) {
-        p.setPen(QPen(QColor("#388dff"), 1, Qt::DashLine));
-        p.setBrush(QColor(56, 141, 255, 25));
+        p.setPen(QPen(palette().brush(QPalette::Highlight), 1, Qt::DashLine));
+        auto selectionColor = palette().color(QPalette::Highlight);
+        selectionColor.setAlpha(25);
+        p.setBrush(selectionColor);
         p.drawRect(QRectF(start, last).normalized());
     }
 }

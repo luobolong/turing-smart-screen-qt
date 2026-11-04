@@ -1,9 +1,12 @@
-param([string]$QtRoot='C:/Users/Administrator/Documents/Workspace/personal/audiomonitor/qt/6.8.0/msvc2022_64')
+param(
+    [string]$QtRoot='C:/Users/Administrator/Documents/Workspace/personal/audiomonitor/qt/6.8.0/msvc2022_64',
+    [string]$Destination
+)
 $ErrorActionPreference='Stop'
 $taskRoot=Split-Path $PSScriptRoot -Parent
 Push-Location $taskRoot
 try {
-    $taskDestination=Join-Path $taskRoot 'dist/turing-screen-qt-0.2.0-windows-x64'
+    $taskDestination=if(!$Destination){Join-Path $taskRoot 'dist/turing-screen-qt-0.2.0-windows-x64'}elseif([IO.Path]::IsPathRooted($Destination)){$Destination}else{Join-Path $taskRoot $Destination}
     if(Test-Path -LiteralPath $taskDestination){throw 'Release directory already exists; choose or archive the existing release first.'}
     New-Item -ItemType Directory -Path $taskDestination,"$taskDestination/licenses" -Force | Out-Null
     Copy-Item -LiteralPath 'build/windows/Release/turing-screen-qt.exe' -Destination $taskDestination
@@ -16,6 +19,11 @@ try {
     New-Item -ItemType Directory -Path "$taskDestination/plugins/platforms","$taskDestination/plugins/imageformats" -Force | Out-Null
     Copy-Item -LiteralPath "$QtRoot/plugins/platforms/qwindows.dll","$QtRoot/plugins/platforms/qoffscreen.dll" -Destination "$taskDestination/plugins/platforms"
     Copy-Item -LiteralPath "$QtRoot/plugins/imageformats/qjpeg.dll" -Destination "$taskDestination/plugins/imageformats"
+    $taskStylePlugins=Join-Path $QtRoot 'plugins/styles'
+    if(Test-Path -LiteralPath $taskStylePlugins){
+        New-Item -ItemType Directory -Path "$taskDestination/plugins/styles" -Force | Out-Null
+        Get-ChildItem -LiteralPath $taskStylePlugins -Filter '*.dll' | Where-Object {$_.BaseName -notmatch 'd$'} | Copy-Item -Destination "$taskDestination/plugins/styles"
+    }
     $taskSchannel=Join-Path $QtRoot 'plugins/tls/qschannelbackend.dll'
     if(!(Test-Path -LiteralPath $taskSchannel)){throw 'Qt Schannel TLS plugin is required for weather HTTPS.'}
     New-Item -ItemType Directory -Path "$taskDestination/plugins/tls" -Force | Out-Null
