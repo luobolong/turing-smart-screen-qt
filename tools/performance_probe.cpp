@@ -205,9 +205,9 @@ public:
             window->show();
             window->sampling.stop();
             if (scenario == "editor") window->setEditing(true);
-            if (scenario == "sensors") window->setPage(1);
-            if (scenario == "settings") window->setPage(2);
-            if (scenario == "diagnostics") window->setPage(3);
+            if (scenario == "sensors") window->setPage(MainWindow::SensorsPage);
+            if (scenario == "settings") window->setPage(MainWindow::SettingsPage);
+            if (scenario == "diagnostics") window->setPage(MainWindow::DiagnosticsPage);
             if (scenario == "hidden")
                 QTimer::singleShot(5000, window.get(), [&] { window->hide(); });
             if (scenario == "empty") {

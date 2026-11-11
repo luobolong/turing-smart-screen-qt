@@ -99,7 +99,8 @@ void ApplicationController::updateTrayState() {
 void ApplicationController::scheduleLightweight() {
     countdown.stop();
     if (closed && editor && !editor->isVisible() && runtime->config["auto_lightweight"].toBool() && trayAvailable())
-        countdown.start(qBound(1, runtime->config.value("lightweight_delay_seconds").toInt(60), 86400) * 1000);
+        // Even at zero, defer destruction until the window's closeEvent returns.
+        countdown.start(qBound(0, runtime->config.value("lightweight_delay_seconds").toInt(60), 86400) * 1000);
 }
 QJsonObject ApplicationController::editorState() const {
     const auto history = [](const QList<QJsonObject> &list) {
@@ -138,7 +139,7 @@ void ApplicationController::restoreEditor(const QJsonObject &state) {
     for (const auto &value : state["selection"].toArray()) selection.append(value.toString());
     editor->selection(selection);
     editor->setEditing(state["editing"].toBool());
-    editor->navigation->setCurrentIndex(qBound(0, state["page"].toInt(), 3));
+    editor->setPage(qBound(0, state["page"].toInt(), int(MainWindow::PageCount) - 1));
     editor->search->setText(state["search"].toString());
     editor->restoreGeometry(QByteArray::fromBase64(state["geometry"].toString().toLatin1()));
 }

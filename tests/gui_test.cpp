@@ -49,6 +49,178 @@ static void dragCanvas(Canvas &canvas, QPointF from, QPointF to,
 class GuiTest : public QObject {
     Q_OBJECT
 private slots:
+    void sidebarNavigationSeparatesLibraryAndEditor() {
+        TestProfile dir;
+        MainWindow w(dir.path());
+        w.show();
+        QTRY_VERIFY(w.library->isVisible());
+        QVERIFY(w.previewCanvas->isVisible());
+        QVERIFY(!w.canvas->isVisible());
+        QVERIFY(!w.editing);
+        QVERIFY(!w.sidebarExpanded);
+        QCOMPARE(w.sidebar->width(), 60);
+        QCOMPARE(w.titleBar->width(), w.root->width());
+        QVERIFY(w.titleBar->mapTo(w.root, QPoint()).y() < w.sidebar->mapTo(w.root, QPoint()).y());
+        QVERIFY(w.titleBar->isAncestorOf(w.sidebarToggle));
+        QVERIFY(!w.saveButton->isVisible());
+        QVERIFY(!w.findChild<QLabel *>("applicationTitle"));
+        QVERIFY(!w.findChild<QToolButton *>("sidebarNew"));
+        QCOMPARE(w.navigation->count(), 5);
+        QCOMPARE(w.library->viewMode(), QListView::ListMode);
+        QVERIFY(!w.library->isWrapping());
+        QCOMPARE(w.librarySplit->count(), 3);
+        QVERIFY(w.devicePanel->isVisible());
+        QVERIFY(w.devicePanel->isAncestorOf(w.portBox));
+        QVERIFY(w.devicePanel->isAncestorOf(w.sendButton));
+        QVERIFY(w.portBox->isVisible());
+        QVERIFY(w.devicePanel->mapTo(&w, QPoint()).x() > w.previewCanvas->mapTo(&w, QPoint()).x());
+        const auto firstRow = w.library->visualItemRect(w.library->item(0));
+        const auto secondRow = w.library->visualItemRect(w.library->item(1));
+        QCOMPARE(firstRow.left(), secondRow.left());
+        QVERIFY(secondRow.top() > firstRow.bottom());
+        w.mirrorBox->setChecked(true);
+        QVERIFY(w.previewCanvas->mirrored);
+        QVERIFY(w.canvas->mirrored);
+        w.mirrorBox->setChecked(false);
+        QCOMPARE(w.navigation->currentRow(), int(MainWindow::LibraryPage));
+        w.choose(assets() + "/themes/nightfall.json");
+        const auto original = w.theme.data;
+        w.modeButton->click();
+        QTRY_VERIFY(w.canvas->isVisible());
+        QVERIFY(!w.library->isVisible());
+        QVERIFY(!w.devicePanel->isVisible());
+        QVERIFY(w.editing);
+        QVERIFY(w.saveButton->isVisible());
+        QCOMPARE(w.navigation->currentRow(), int(MainWindow::EditorPage));
+        w.addComponent("RAM");
+        const auto edited = w.theme.data;
+        const auto selected = w.selection();
+        QVERIFY(edited != original);
+        const auto libraryItem = w.navigation->item(MainWindow::LibraryPage);
+        QTest::mouseClick(w.navigation->viewport(), Qt::LeftButton, Qt::NoModifier,
+                         w.navigation->visualItemRect(libraryItem).center());
+        QTRY_VERIFY(w.library->isVisible());
+        QVERIFY(!w.canvas->isVisible());
+        QVERIFY(!w.editing);
+        QCOMPARE(w.theme.data, edited);
+        QCOMPARE(w.selection(), selected);
+        for (const auto action : w.findChildren<QAction *>("shortcut"))
+            if (action->shortcut() == QKeySequence(QKeySequence::Undo))
+                action->trigger();
+        QCOMPARE(w.theme.data, edited); // The preview does not accept editing shortcuts.
+        w.modeButton->click();
+        QCOMPARE(w.page, int(MainWindow::EditorPage));
+        QCOMPARE(w.theme.data, edited);
+        w.undo();
+        QCOMPARE(w.theme.data, original);
+        w.redo();
+        QCOMPARE(w.theme.data, edited);
+        w.selection(selected);
+        w.search->setText("Nightfall");
+        w.inspectorTabs->setCurrentIndex(1);
+        w.english = !w.english;
+        w.build();
+        QCOMPARE(w.pages->currentIndex(), int(MainWindow::EditorPage));
+        QCOMPARE(w.search->text(), QString("Nightfall"));
+        QCOMPARE(w.selection(), selected);
+        QCOMPARE(w.inspectorTabs->currentIndex(), 1);
+        QCOMPARE(w.theme.data, edited);
+        QTRY_COMPARE(w.editorSplit->orientation(), Qt::Horizontal);
+        w.modeButton->click();
+        QCOMPARE(w.page, int(MainWindow::LibraryPage));
+        QVERIFY(w.previewCanvas->isVisible());
+        QCOMPARE(w.theme.data, edited);
+        w.sidebarToggle->click();
+        QVERIFY(w.sidebarExpanded);
+        w.build();
+        QVERIFY(w.sidebarExpanded);
+        w.quitting = true;
+    }
+    void compactLayoutReflowsAndSidebarRemainsUsable() {
+        TestProfile dir;
+        MainWindow w(dir.path());
+        w.config["sidebar_expanded"] = true;
+        w.setSidebarExpanded(true);
+        w.show();
+        QTRY_COMPARE(w.librarySplit->orientation(), Qt::Horizontal);
+        QVERIFY(w.sidebarExpanded);
+        w.setPage(MainWindow::DiagnosticsPage);
+        w.resize(760, 680);
+        QTRY_COMPARE(w.size(), QSize(760, 680));
+        w.setPage(MainWindow::LibraryPage);
+        QTRY_COMPARE(w.librarySplit->orientation(), Qt::Vertical);
+        QTRY_VERIFY(w.library->isWrapping());
+        QCOMPARE(w.library->flow(), QListView::LeftToRight);
+        const auto rowRect = [&w](int n) { return w.library->visualItemRect(w.library->item(n)); };
+        QTRY_COMPARE(rowRect(0).top(), rowRect(1).top());
+        QVERIFY(rowRect(1).left() > rowRect(0).left());
+        QTRY_VERIFY(rowRect(2).top() > rowRect(0).bottom());
+        QCOMPARE(rowRect(2).left(), rowRect(0).left());
+        auto separator = w.librarySplit->handle(1)->findChild<QFrame *>("paneSeparator");
+        QVERIFY(separator && separator->isVisible());
+        QCOMPARE(separator->frameShape(), QFrame::HLine);
+        QVERIFY(!w.sidebarExpanded);
+        QCOMPARE(w.sidebar->width(), 60);
+        QVERIFY(w.navigation->item(MainWindow::SettingsPage)->text().isEmpty());
+        QVERIFY(!w.navigation->item(MainWindow::SettingsPage)->toolTip().isEmpty());
+        w.setEditing(true);
+        QTRY_COMPARE(w.editorSplit->orientation(), Qt::Vertical);
+        QVERIFY(w.canvas->isVisible());
+        QVERIFY(w.inspectorTabs->isVisible());
+        w.sidebarToggle->click();
+        QVERIFY(w.sidebarExpanded);
+        QCOMPARE(w.sidebar->width(), 208);
+        QVERIFY(!w.navigation->item(MainWindow::SettingsPage)->text().isEmpty());
+        QCOMPARE(w.page, int(MainWindow::EditorPage));
+        w.sidebarToggle->click();
+        QVERIFY(!w.sidebarExpanded);
+        w.resize(640, 520);
+        QTRY_COMPARE(w.size(), QSize(640, 520));
+        for (int page = 0; page < MainWindow::PageCount; ++page) {
+            w.setPage(page);
+            QCoreApplication::processEvents();
+            QCOMPARE(w.pages->currentIndex(), page);
+            QCOMPARE(w.navigation->currentRow(), page);
+            QVERIFY(w.pageTitle->isVisible());
+            QVERIFY(w.pages->width() <= w.width() - w.sidebar->width());
+            QVERIFY(w.pages->height() > 300);
+        }
+        w.resize(1280, 820);
+        w.setPage(MainWindow::LibraryPage);
+        QTRY_COMPARE(w.librarySplit->orientation(), Qt::Horizontal);
+        QVERIFY(!w.library->isWrapping());
+        QCOMPARE(w.library->flow(), QListView::TopToBottom);
+        QTRY_COMPARE(separator->frameShape(), QFrame::VLine);
+        w.setEditing(true);
+        QTRY_COMPARE(w.editorSplit->orientation(), Qt::Horizontal);
+        w.setSidebarExpanded(true);
+        w.resize(1020, 760);
+        QTRY_COMPARE(w.editorSplit->orientation(), Qt::Vertical);
+        w.sidebarToggle->click();
+        QVERIFY(!w.sidebarExpanded);
+        QTRY_COMPARE(w.editorSplit->orientation(), Qt::Horizontal);
+        w.quitting = true;
+    }
+    void lightweightRestoresNavigationAndSidebarPreference() {
+        TestProfile dir;
+        ApplicationController app(dir.path(), {}, [] { return true; });
+        app.showWindow();
+        auto w = app.window();
+        w->setPage(MainWindow::SensorsPage);
+        w->setSidebarExpanded(true);
+        w->sidebarToggle->click();
+        QVERIFY(!w->sidebarExpanded);
+        QVERIFY(app.enterLightweight());
+        app.showWindow();
+        w = app.window();
+        QCOMPARE(w->page, int(MainWindow::SensorsPage));
+        QCOMPARE(w->navigation->currentRow(), int(MainWindow::SensorsPage));
+        QVERIFY(!w->sidebarExpanded);
+        QVERIFY(w->sensorTable->isVisible());
+        QVERIFY(!w->portBox->isVisible());
+        QVERIFY(!w->canvas->isVisible());
+        QVERIFY(!app.display().preview);
+    }
     void autostartSkipsEditorAndRestoresFromTray() {
         TestProfile dir;
         const auto themePath = assets() + "/themes/nightfall.json";
@@ -170,7 +342,7 @@ private slots:
             MainWindow w(dir.path(), {}, nullptr, backend);
             w.show();
             QVERIFY(!w.startup->ready()); // No background polling before Settings is opened.
-            w.setPage(2);
+            w.setPage(MainWindow::SettingsPage);
             QTRY_VERIFY(w.startup->ready() && !w.startup->busy());
             QVERIFY(w.startupToggle->isChecked());
             QVERIFY(w.startupToggle->isEnabled());
@@ -187,12 +359,12 @@ private slots:
             backend->failure.clear();
         }
         MainWindow reopened(dir.path(), {}, nullptr, backend);
-        reopened.setPage(2);
+        reopened.setPage(MainWindow::SettingsPage);
         QTRY_VERIFY(reopened.startup->ready() && !reopened.startup->busy());
         QVERIFY(!reopened.startupToggle->isChecked());
         backend->enabled = true; // Simulate an external change in OS startup settings.
-        reopened.setPage(0);
-        reopened.setPage(2);
+        reopened.setPage(MainWindow::LibraryPage);
+        reopened.setPage(MainWindow::SettingsPage);
         QTRY_VERIFY(!reopened.startup->busy());
         QVERIFY(reopened.startupToggle->isChecked());
     }
@@ -242,6 +414,74 @@ private slots:
         QVERIFY(w->theme.data != current);
         w->redo();
         QCOMPARE(w->theme.data, current);
+    }
+    void lightweightCountdownSettingsAreConditionalAndKeepZero() {
+        TestProfile dir;
+        MainWindow w(dir.path(), {}, nullptr, std::make_shared<TestStartupBackend>());
+        w.setPage(MainWindow::SettingsPage);
+        w.show();
+        auto enabled = w.findChild<QCheckBox *>("autoLightweight");
+        auto delay = w.findChild<QSpinBox *>("lightweightDelay");
+        auto label = w.findChild<QLabel *>("lightweightDelayLabel");
+        QVERIFY(enabled && delay && label);
+        QVERIFY(!enabled->isChecked());
+        QVERIFY(!delay->isVisible());
+        QVERIFY(!label->isVisible());
+        enabled->setChecked(true);
+        QVERIFY(delay->isVisible());
+        QVERIFY(label->isVisible());
+        QCOMPARE(delay->minimum(), 0);
+        delay->setValue(0);
+        enabled->setChecked(false);
+        QVERIFY(!delay->isVisible());
+        QVERIFY(!label->isVisible());
+        QCOMPARE(w.config["lightweight_delay_seconds"].toInt(-1), 0);
+        QTRY_VERIFY(w.startup->ready() && !w.startup->busy());
+        w.english = true;
+        w.build();
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        enabled = w.findChild<QCheckBox *>("autoLightweight");
+        delay = w.findChild<QSpinBox *>("lightweightDelay");
+        label = w.findChild<QLabel *>("lightweightDelayLabel");
+        QTRY_VERIFY(enabled->isVisible());
+        QCOMPARE(delay->value(), 0);
+        QVERIFY(!delay->isVisible());
+        enabled->setChecked(true);
+        QVERIFY(delay->isVisible());
+        QVERIFY(label->isVisible());
+        for (auto text : w.findChildren<QLabel *>()) {
+            QVERIFY(!text->text().startsWith(QString::fromUtf8("原生界面")));
+            QVERIFY(!text->text().startsWith("Native interface"));
+        }
+        w.quitting = true;
+    }
+    void zeroCountdownEntersAfterCloseAndReopeningCancelsIt() {
+        TestProfile dir;
+        ApplicationController app(dir.path(), {}, [] { return true; });
+        app.showWindow();
+        auto w = app.window();
+        w->findChild<QCheckBox *>("autoLightweight")->setChecked(true);
+        w->findChild<QSpinBox *>("lightweightDelay")->setValue(0);
+        QVERIFY(!app.countdown.isActive());
+        QPointer<MainWindow> old = w;
+        w->close();
+        QVERIFY(old); // Do not destroy a window while its closeEvent is still on the stack.
+        QVERIFY(app.countdown.isActive());
+        QCOMPARE(app.countdown.interval(), 0);
+        QTRY_VERIFY(app.isLightweight());
+        QVERIFY(old.isNull());
+        QVERIFY(!app.window());
+        app.showWindow();
+        QCOMPARE(app.window()->findChild<QSpinBox *>("lightweightDelay")->value(), 0);
+        QVERIFY(app.window()->findChild<QCheckBox *>("autoLightweight")->isChecked());
+        app.window()->close();
+        app.showWindow();
+        QCoreApplication::processEvents();
+        QVERIFY(!app.isLightweight());
+        QVERIFY(app.window()->isVisible());
+        QVERIFY(!app.countdown.isActive());
+        app.window()->close();
+        QTRY_VERIFY(app.isLightweight());
     }
     void lightweightCountdownStartsOnCloseAndReopenCancels() {
         TestProfile dir;
@@ -352,7 +592,7 @@ private slots:
             file.close();
             w.addComponent("CPU");
             w.directionBox->setCurrentIndex(3);
-            w.leftPages->setCurrentIndex(0);
+            w.setPage(MainWindow::LibraryPage);
             const auto edited = w.theme.data;
             bool cancellationSeen = false, unsavedSeen = false;
             QTimer::singleShot(0, &w, [&] {
@@ -844,14 +1084,15 @@ private slots:
             MainWindow w(dir.path());
             w.show();
             QTest::qWait(50);
-            w.setPage(2);
-            QCOMPARE(w.pages->currentIndex(), 2);
+            w.setPage(MainWindow::SettingsPage);
+            QCOMPARE(w.pages->currentIndex(), int(MainWindow::SettingsPage));
             QVERIFY(!w.left->isVisible());
             w.resize(1100, 720);
             QTest::qWait(50);
             QCOMPARE(w.size(), QSize(1100, 720));
-            w.setPage(0);
-            QVERIFY(w.left->isVisible());
+            w.setPage(MainWindow::LibraryPage);
+            QVERIFY(w.library->isVisible());
+            QVERIFY(!w.canvas->isVisible());
             w.config["minimize_to_tray"] = true;
             w.config["interval_ms"] = 3000;
             w.config["language"] = "english";
@@ -881,7 +1122,7 @@ private slots:
         MainWindow w(dir.path());
         w.show();
         QTest::qWait(50);
-        w.setPage(1);
+        w.setPage(MainWindow::SensorsPage);
         const auto all = metrics();
         for (const auto &key : {"RamValue", "RamTotal", "RamValid", "RamUsage"}) {
             int row = -1;
@@ -894,7 +1135,7 @@ private slots:
             QVERIFY(w.sensorTable->item(row, 1)->text().endsWith("GB"));
             QVERIFY(!w.sensorTable->item(row, 2)->text().isEmpty());
         }
-        w.setPage(2);
+        w.setPage(MainWindow::SettingsPage);
         auto city = w.findChild<QLineEdit *>("weatherCity");
         auto enabled = w.findChild<QCheckBox *>("weatherEnabled");
         QVERIFY(city);

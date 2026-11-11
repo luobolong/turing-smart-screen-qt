@@ -47,6 +47,33 @@ static bool storeConfig(const QString &directory, const QJsonObject &config, QSt
     }
     return true;
 }
+class PaneSplitterHandle : public QSplitterHandle {
+    QFrame *separator;
+    void updateSeparator() {
+        separator->setFrameShape(orientation() == Qt::Horizontal ? QFrame::VLine : QFrame::HLine);
+        separator->setGeometry(rect());
+    }
+public:
+    PaneSplitterHandle(Qt::Orientation orientation, QSplitter *parent)
+        : QSplitterHandle(orientation, parent), separator(new QFrame(this)) {
+        separator->setObjectName("paneSeparator");
+        separator->setFrameShadow(QFrame::Plain);
+        separator->setLineWidth(1);
+        separator->setAttribute(Qt::WA_TransparentForMouseEvents);
+        updateSeparator();
+    }
+protected:
+    void resizeEvent(QResizeEvent *event) override {
+        QSplitterHandle::resizeEvent(event);
+        updateSeparator();
+    }
+};
+class PaneSplitter : public QSplitter {
+public:
+    explicit PaneSplitter(QWidget *parent = nullptr) : QSplitter(parent) { setHandleWidth(7); }
+protected:
+    QSplitterHandle *createHandle() override { return new PaneSplitterHandle(orientation(), this); }
+};
 class LayerTree : public QTreeWidget {
 public:
     std::function<void(QStringList, QString, int)> dropped;
@@ -105,8 +132,8 @@ MainWindow::MainWindow(std::shared_ptr<DisplayRuntime> session, QWidget *parent,
     resourceTrace("UI built");
     render();
     resourceTrace("rendered");
-    resize(1360, 900);
-    setMinimumSize(1000, 660);
+    setMinimumSize(640, 520);
+    resize(1280, 820);
     resourceClock.start();
 }
 MainWindow::~MainWindow() {
@@ -115,40 +142,138 @@ MainWindow::~MainWindow() {
 }
 void MainWindow::showEvent(QShowEvent *event) {
     QMainWindow::showEvent(event);
-    runtime->preview = page == 0;
+    runtime->preview = page == LibraryPage || page == EditorPage;
+    updateResponsiveLayout();
+    QTimer::singleShot(0, this, &MainWindow::thumbnails);
     emit windowOpened();
 }
 void MainWindow::hideEvent(QHideEvent *event) {
     QMainWindow::hideEvent(event);
     runtime->preview = false;
 }
+void MainWindow::resizeEvent(QResizeEvent *event) {
+    QMainWindow::resizeEvent(event);
+    if ((event->oldSize().width() < 900) != (width() < 900))
+        setSidebarExpanded(width() >= 900 && config.value("sidebar_expanded").toBool(false));
+    updateResponsiveLayout();
+}
+bool MainWindow::eventFilter(QObject *watched, QEvent *event) {
+    if ((watched == pages || (library && watched == library->viewport())) && event->type() == QEvent::Resize)
+        QTimer::singleShot(0, this, &MainWindow::updateResponsiveLayout);
+    return QMainWindow::eventFilter(watched, event);
+}
 void MainWindow::build() {
     building = true;
+    const auto filter = search ? search->text() : QString();
+    const auto selected = selection();
+    const int inspectorPage = inspectorTabs ? inspectorTabs->currentIndex() : 0;
     auto old = takeCentralWidget();
     if (old)
         old->deleteLater();
     root = new QWidget;
     root->setObjectName("root");
-    auto outer = new QVBoxLayout(root);
-    outer->setContentsMargins(12, 8, 12, 0);
-    outer->setSpacing(8);
-    auto header = new QHBoxLayout;
-    label("Turing Screen", header);
-    header->addSpacing(24);
-    navigation = new QTabBar;
-    for (auto t :
-         {L("主题", "Themes"), L("传感器", "Sensors"), L("设置", "Settings"), L("诊断", "Diagnostics")})
-        navigation->addTab(t);
-    navigation->setExpanding(false);
-    header->addWidget(navigation);
-    header->addStretch();
-    button(L("保存主题", "Save"), header, [this] { saveTheme(); });
-    outer->addLayout(header);
+    auto windowLayout = new QVBoxLayout(root);
+    windowLayout->setContentsMargins(0, 0, 0, 0);
+    windowLayout->setSpacing(0);
+    titleBar = new QWidget;
+    titleBar->setObjectName("titleBar");
+    auto header = new QHBoxLayout(titleBar);
+    header->setContentsMargins(12, 8, 16, 8);
+    header->setSpacing(12);
+    sidebarToggle = new QToolButton;
+    sidebarToggle->setObjectName("sidebarToggle");
+    sidebarToggle->setAutoRaise(true);
+    sidebarToggle->setMinimumSize(32, 32);
+    header->addWidget(sidebarToggle);
+    pageTitle = label({}, header);
+    pageTitle->setObjectName("pageTitle");
+    title = label({}, header);
+    title->setMinimumWidth(0);
+    title->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+    header->setStretch(header->count() - 1, 1);
+    resolution = label({}, header);
+    modeButton = button({}, header, [this] { setEditing(page != EditorPage); });
+    modeButton->setObjectName("editThemeButton");
+    saveButton = button(L("保存主题", "Save theme"), header, [this] { saveTheme(); });
+    saveButton->setObjectName("saveThemeButton");
+    windowLayout->addWidget(titleBar);
+    auto divider = new QFrame;
+    divider->setFrameShape(QFrame::HLine);
+    divider->setFrameShadow(QFrame::Plain);
+    divider->setLineWidth(1);
+    windowLayout->addWidget(divider);
+    connect(sidebarToggle, &QToolButton::clicked, this, [this] {
+        setSidebarExpanded(!sidebarExpanded);
+        config["sidebar_expanded"] = sidebarExpanded;
+        persist();
+        updateResponsiveLayout();
+    });
+    auto body = new QWidget;
+    auto shell = new QHBoxLayout(body);
+    shell->setContentsMargins(0, 0, 0, 0);
+    shell->setSpacing(0);
+    windowLayout->addWidget(body, 1);
+    auto sidebarFrame = new QFrame;
+    sidebarFrame->setFrameShape(QFrame::NoFrame);
+    sidebar = sidebarFrame;
+    sidebar->setObjectName("sidebar");
+    auto sideLayout = new QVBoxLayout(sidebar);
+    sideLayout->setContentsMargins(8, 12, 8, 12);
+    const auto sideAction = [&](const QString &text, QStyle::StandardPixmap icon, const char *name,
+                                const std::function<void()> &action) {
+        auto tool = new QToolButton;
+        tool->setObjectName(name);
+        tool->setText(text);
+        tool->setToolTip(text);
+        tool->setAccessibleName(text);
+        tool->setIcon(style()->standardIcon(icon));
+        tool->setAutoRaise(true);
+        tool->setMinimumHeight(40);
+        tool->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        sideLayout->addWidget(tool);
+        connect(tool, &QToolButton::clicked, this, action);
+    };
+    navigation = new QListWidget;
+    navigation->setObjectName("navigation");
+    navigation->setAccessibleName(L("功能导航", "Navigation"));
+    navigation->setFrameShape(QFrame::NoFrame);
+    navigation->setBackgroundRole(QPalette::Window);
+    navigation->viewport()->setBackgroundRole(QPalette::Window);
+    navigation->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    navigation->setIconSize(QSize(22, 22));
+    navigation->setSpacing(3);
+    const QStringList names{L("主题预览", "Theme preview"), L("主题编辑器", "Theme editor"),
+                            L("传感器", "Sensors"), L("设置", "Settings"),
+                            L("诊断", "Diagnostics")};
+    const QStyle::StandardPixmap icons[]{QStyle::SP_DirIcon, QStyle::SP_FileDialogContentsView,
+        QStyle::SP_DriveHDIcon, QStyle::SP_FileDialogDetailedView,
+        QStyle::SP_MessageBoxInformation};
+    for (int n = 0; n < PageCount; ++n) {
+        auto item = new QListWidgetItem(style()->standardIcon(icons[n]), names[n], navigation);
+        item->setData(Qt::UserRole, names[n]);
+        item->setData(Qt::AccessibleTextRole, names[n]);
+        item->setToolTip(names[n]);
+        item->setSizeHint(QSize(40, 44));
+    }
+    sideLayout->addWidget(navigation, 1);
+    sideAction(L("轻量模式", "Lightweight mode"), QStyle::SP_TitleBarMinButton, "sidebarLightweight",
+               [this] { emit lightweightRequested(); });
+    shell->addWidget(sidebar);
+    auto content = new QWidget;
+    content->setObjectName("mainContent");
+    auto outer = new QVBoxLayout(content);
+    outer->setContentsMargins(20, 16, 20, 12);
+    outer->setSpacing(12);
     pages = new QStackedWidget;
+    pages->setObjectName("pages");
+    pages->installEventFilter(this);
     outer->addWidget(pages, 1);
     auto t = new QWidget;
     pages->addWidget(t);
-    buildThemePage(t);
+    buildLibraryPage(t);
+    auto editor = new QWidget;
+    pages->addWidget(editor);
+    buildEditorPage(editor);
     auto sensors = new QWidget;
     pages->addWidget(sensors);
     buildSensors(sensors);
@@ -158,6 +283,7 @@ void MainWindow::build() {
     auto diag = new QWidget;
     pages->addWidget(diag);
     buildDiagnostics(diag);
+    shell->addWidget(content, 1);
     setCentralWidget(root);
     statusBar()->clearMessage();
     for (auto l : findChildren<QWidget *>("statusPart")) {
@@ -172,6 +298,11 @@ void MainWindow::build() {
     sendState->setObjectName("statusPart");
     status = new QLabel;
     status->setObjectName("statusPart");
+    for (auto part : {dataState, status, connection, sendState}) {
+        part->setMinimumWidth(0);
+        part->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred);
+    }
+    status->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
     statusBar()->addWidget(dataState);
     statusBar()->addWidget(status, 1);
     statusBar()->addPermanentWidget(connection);
@@ -180,8 +311,8 @@ void MainWindow::build() {
     quitButton->setObjectName("statusPart");
     statusBar()->addPermanentWidget(quitButton);
     connect(quitButton, &QPushButton::clicked, this, &MainWindow::quit);
-    connect(navigation, &QTabBar::currentChanged, this, &MainWindow::setPage);
-    navigation->setCurrentIndex(page);
+    connect(navigation, &QListWidget::currentRowChanged, this, &MainWindow::setPage);
+    navigation->setCurrentRow(page);
     pages->setCurrentIndex(page);
     setWindowTitle(L("图灵智显 · USB 副屏", "Turing Screen · USB Display"));
     for (auto a : findChildren<QAction *>("shortcut"))
@@ -197,10 +328,10 @@ void MainWindow::build() {
     shortcut(QKeySequence::SaveAs, [this] { saveTheme(true); });
     shortcut(QKeySequence::Open, [this] { importTheme(); });
     shortcut(QKeySequence::New, [this] { newTheme(); });
-    shortcut(QKeySequence::Undo, [this] { undo(); });
-    shortcut(QKeySequence::Redo, [this] { redo(); });
+    shortcut(QKeySequence::Undo, [this] { if (page == EditorPage) undo(); });
+    shortcut(QKeySequence::Redo, [this] { if (page == EditorPage) redo(); });
     shortcut(QKeySequence(Qt::Key_F2), [this] {
-        if (editing && page == 0)
+        if (editing && page == EditorPage)
             rename();
     });
     const QList<QPair<QKeySequence, QString>> shortcuts{
@@ -213,64 +344,96 @@ void MainWindow::build() {
         {QKeySequence(Qt::Key_Delete), "delete"}};
     for (auto pair : shortcuts)
         shortcut(pair.first, [this, pair] {
-            if (page == 0 && editing && !qobject_cast<QLineEdit *>(QApplication::focusWidget()))
+            if (page == EditorPage && editing && !qobject_cast<QLineEdit *>(QApplication::focusWidget()))
                 layerAction(pair.second);
         });
     shortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_N), [this] {
-        if (page == 0)
+        if (page == EditorPage)
             createLayer("text");
     });
     buildLibrary();
     buildTree();
+    search->setText(filter);
+    selection(selected);
+    inspectorTabs->setCurrentIndex(inspectorPage);
     emit preferencesChanged();
     building = false;
-    setEditing(editing);
+    setSidebarExpanded(width() >= 900 && config.value("sidebar_expanded").toBool(false));
+    setPage(page);
+    updateResponsiveLayout();
     updateStatus();
     properties();
 }
-void MainWindow::buildThemePage(QWidget *w) {
-    auto layout = new QHBoxLayout(w);
+void MainWindow::buildLibraryPage(QWidget *w) {
+    auto layout = new QVBoxLayout(w);
     layout->setContentsMargins(0, 0, 0, 0);
-    auto splitter = new QSplitter;
-    layout->addWidget(splitter);
-    auto leftPanel = new QFrame;
-    leftPanel->setFrameShape(QFrame::StyledPanel);
-    left = leftPanel;
-    auto lv = new QVBoxLayout(left);
-    lv->setContentsMargins(12, 16, 12, 12);
-    auto lt = new QHBoxLayout;
-    button(L("主题库", "Library"), lt, [this] {
-        leftPages->setCurrentIndex(0);
-        thumbnails();
-    });
-    button(L("图层", "Layers"), lt, [this] {
-        setEditing(true);
-        leftPages->setCurrentIndex(1);
-    });
-    lv->addLayout(lt);
-    leftPages = new QStackedWidget;
-    lv->addWidget(leftPages, 1);
-    auto lib = new QWidget;
-    auto ll = new QVBoxLayout(lib);
-    ll->setContentsMargins(0, 0, 0, 0);
+    auto bar = new QHBoxLayout;
     search = new QLineEdit;
+    search->setObjectName("themeSearch");
+    search->setClearButtonEnabled(true);
     search->setPlaceholderText(L("搜索主题", "Search themes"));
-    ll->addWidget(search);
-    auto libraryButtons = new QHBoxLayout;
-    button(L("＋ 新建", "+ New"), libraryButtons, [this] { newTheme(); });
-    button(L("导入", "Import"), libraryButtons, [this] { importTheme(); });
-    deleteThemeButton = button(L("删除", "Delete"), libraryButtons, [this] { deleteTheme(path); });
+    search->setMinimumWidth(100);
+    bar->addWidget(search, 1);
+    button(L("新建", "New"), bar, [this] { newTheme(); });
+    button(L("导入", "Import"), bar, [this] { importTheme(); });
+    deleteThemeButton = button(L("删除", "Delete"), bar, [this] { deleteTheme(path); });
     deleteThemeButton->setObjectName("deleteThemeButton");
-    ll->addLayout(libraryButtons);
+    layout->addLayout(bar);
+    libraryEmpty = new QLabel(L("没有找到匹配的主题，请尝试其他关键词。", "No matching themes. Try another search."));
+    libraryEmpty->setWordWrap(true);
+    libraryEmpty->hide();
+    layout->addWidget(libraryEmpty);
+    librarySplit = new PaneSplitter;
+    librarySplit->setObjectName("librarySplit");
+    librarySplit->setChildrenCollapsible(false);
     library = new QListWidget;
+    library->setObjectName("themeLibrary");
+    library->viewport()->installEventFilter(this);
+    library->setViewMode(QListView::ListMode);
+    library->setFlow(QListView::TopToBottom);
+    library->setResizeMode(QListView::Adjust);
+    library->setMovement(QListView::Static);
+    library->setWrapping(false);
+    library->setWordWrap(true);
     library->setIconSize(QSize(88, 60));
+    library->setSpacing(4);
     library->setUniformItemSizes(true);
+    library->setFrameShape(QFrame::NoFrame);
+    library->setMinimumSize(200, 80);
+    library->setToolTip(L("选择主题可预览；双击主题进入编辑器。", "Select a theme to preview. Double-click to edit."));
+    library->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     library->setContextMenuPolicy(Qt::CustomContextMenu);
-    ll->addWidget(library, 1);
-    leftPages->addWidget(lib);
+    librarySplit->addWidget(library);
+    auto preview = new QWidget;
+    auto previewLayout = new QVBoxLayout(preview);
+    previewLayout->setContentsMargins(12, 0, 0, 0);
+    label(L("当前主题", "Current theme"), previewLayout);
+    previewCanvas = new Canvas;
+    previewCanvas->setObjectName("previewCanvas");
+    previewCanvas->theme = &theme;
+    previewCanvas->setMinimumSize(200, 160);
+    previewLayout->addWidget(previewCanvas, 1);
+    preview->setMinimumWidth(220);
+    librarySplit->addWidget(preview);
+    devicePanel = new QWidget;
+    devicePanel->setObjectName("devicePanel");
+    devicePanel->setMinimumSize(240, 80);
+    buildDevicePanel(devicePanel);
+    librarySplit->addWidget(devicePanel);
+    librarySplit->setStretchFactor(0, 0);
+    librarySplit->setStretchFactor(1, 1);
+    librarySplit->setStretchFactor(2, 0);
+    librarySplit->setSizes({250, 650, 280});
+    layout->addWidget(librarySplit, 1);
     connect(search, &QLineEdit::textChanged, this, [this](const QString &s) {
+        int matches = 0;
         for (int n = 0; n < library->count(); ++n)
-            library->item(n)->setHidden(!library->item(n)->text().contains(s, Qt::CaseInsensitive));
+            if (auto item = library->item(n)) {
+                const bool match = item->text().contains(s, Qt::CaseInsensitive);
+                item->setHidden(!match);
+                matches += match;
+            }
+        libraryEmpty->setVisible(matches == 0);
         thumbnails();
     });
     connect(library, &QListWidget::currentItemChanged, this, [this](QListWidgetItem *item) {
@@ -289,9 +452,68 @@ void MainWindow::buildThemePage(QWidget *w) {
         menu.addAction(L("恢复内置主题", "Restore built-in themes"), this, &MainWindow::restoreBuiltinThemes);
         menu.exec(library->viewport()->mapToGlobal(position));
     });
+    connect(library, &QListWidget::itemDoubleClicked, this, [this] { setEditing(true); });
+}
+void MainWindow::buildEditorPage(QWidget *w) {
+    auto layout = new QVBoxLayout(w);
+    layout->setContentsMargins(0, 0, 0, 0);
+    auto tools = new QToolBar;
+    tools->setObjectName("editorTools");
+    tools->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    tools->setIconSize(QSize(18, 18));
+    tools->setMinimumWidth(0);
+    auto toolBox = new QComboBox;
+    for (auto p : QList<QPair<QString, QString>>{{"move", L("移动", "Move")},
+                                                 {"text", L("文字", "Text")},
+                                                 {"rectangle", L("矩形", "Rectangle")},
+                                                 {"ellipse", L("椭圆", "Ellipse")},
+                                                 {"line", L("直线", "Line")}})
+        toolBox->addItem(p.second, p.first);
+    tools->addWidget(toolBox);
+    undoAction = tools->addAction(style()->standardIcon(QStyle::SP_ArrowBack), L("撤销", "Undo"), this, &MainWindow::undo);
+    redoAction = tools->addAction(style()->standardIcon(QStyle::SP_ArrowForward), L("重做", "Redo"), this, &MainWindow::redo);
+    tools->addSeparator();
+    tools->addAction(L("适应窗口", "Fit"), this, [this] { canvas->setFit(true); });
+    tools->addAction("1:1", this, [this] { canvas->setZoom(1); });
+    tools->addAction("−", this, [this] { canvas->setZoom(canvas->zoom() / 1.2); });
+    tools->addAction("+", this, [this] { canvas->setZoom(canvas->zoom() * 1.2); });
+    tools->addSeparator();
+    auto themeOptions = new QToolButton;
+    themeOptions->setText(L("主题选项", "Theme options"));
+    themeOptions->setPopupMode(QToolButton::InstantPopup);
+    tools->addWidget(themeOptions);
+    auto themeMenu = new QMenu(themeOptions);
+    themeOptions->setMenu(themeMenu);
+    themeMenu->addAction(L("重命名主题", "Rename theme"), this, [this] {
+        bool ok = false;
+        auto name = QInputDialog::getText(this, L("重命名主题", "Rename theme"), L("名称", "Name"),
+                                          QLineEdit::Normal, theme.name(), &ok)
+                        .trimmed();
+        if (ok && !name.isEmpty())
+            mutate([&](Theme &t) { t.data["name"] = name; });
+    });
+    themeMenu->addAction(L("横屏主题", "Landscape theme"), this,
+                         [this] { mutate([](Theme &t) { t.data["landscape"] = true; }); });
+    themeMenu->addAction(L("竖屏主题", "Portrait theme"), this,
+                         [this] { mutate([](Theme &t) { t.data["landscape"] = false; }); });
+    themeMenu->addAction(L("切换文字背景", "Toggle text background"), this, [this] {
+        mutate([](Theme &t) { t.data["use_text_background"] = !t.data["use_text_background"].toBool(); });
+    });
+    themeMenu->addAction(L("另存为", "Save as"), this, [this] { saveTheme(true); });
+    themeMenu->addSeparator();
+    deleteThemeAction = themeMenu->addAction(L("删除主题", "Delete theme"), this, [this] { deleteTheme(path); });
+    themeMenu->addAction(L("恢复内置主题", "Restore built-in themes"), this, &MainWindow::restoreBuiltinThemes);
+    layout->addWidget(tools);
+    editorSplit = new PaneSplitter;
+    editorSplit->setObjectName("editorSplit");
+    editorSplit->setChildrenCollapsible(false);
+    layout->addWidget(editorSplit, 1);
+    auto center = new QWidget;
+    auto cv = new QVBoxLayout(center);
+    cv->setContentsMargins(0, 0, 0, 0);
     auto layers = new QWidget;
     auto llayers = new QVBoxLayout(layers);
-    llayers->setContentsMargins(0, 0, 0, 0);
+    llayers->setContentsMargins(8, 8, 8, 8);
     auto creation = new QHBoxLayout;
     auto add = button(L("＋ 图层", "+ Layer"), creation, [] {});
     auto menu = new QMenu(add);
@@ -334,7 +556,6 @@ void MainWindow::buildThemePage(QWidget *w) {
     tree->setContextMenuPolicy(Qt::CustomContextMenu);
     tree->setEditTriggers(QAbstractItemView::DoubleClicked | QAbstractItemView::EditKeyPressed);
     llayers->addWidget(tree, 1);
-    leftPages->addWidget(layers);
     connect(tree, &QTreeWidget::itemSelectionChanged, this, &MainWindow::selectTree);
     connect(tree, &QTreeWidget::customContextMenuRequested, this,
             [this](QPoint p) { contextMenu(tree->viewport()->mapToGlobal(p)); });
@@ -361,63 +582,13 @@ void MainWindow::buildThemePage(QWidget *w) {
             t.data["layers"] = a;
         });
     });
-    splitter->addWidget(left);
-    auto center = new QWidget;
-    auto cv = new QVBoxLayout(center);
-    cv->setContentsMargins(16, 16, 16, 8);
-    auto heading = new QHBoxLayout;
-    auto text = new QVBoxLayout;
-    title = label(theme.name(), text);
-    title->setMinimumWidth(120);
-    title->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
-    resolution = label({}, text);
-    heading->addLayout(text, 1);
-    modeButton = button({}, heading, [this] { setEditing(!editing); });
-    auto themeOptions = button(L("主题选项", "Theme options"), heading, [] {});
-    auto themeMenu = new QMenu(themeOptions);
-    themeOptions->setMenu(themeMenu);
-    themeMenu->addAction(L("重命名主题", "Rename theme"), this, [this] {
-        bool ok = false;
-        auto name = QInputDialog::getText(this, L("重命名主题", "Rename theme"), L("名称", "Name"),
-                                          QLineEdit::Normal, theme.name(), &ok)
-                        .trimmed();
-        if (ok && !name.isEmpty())
-            mutate([&](Theme &t) { t.data["name"] = name; });
-    });
-    themeMenu->addAction(L("横屏主题", "Landscape theme"), this,
-                         [this] { mutate([](Theme &t) { t.data["landscape"] = true; }); });
-    themeMenu->addAction(L("竖屏主题", "Portrait theme"), this,
-                         [this] { mutate([](Theme &t) { t.data["landscape"] = false; }); });
-    themeMenu->addAction(L("切换文字背景", "Toggle text background"), this, [this] {
-        mutate([](Theme &t) { t.data["use_text_background"] = !t.data["use_text_background"].toBool(); });
-    });
-    themeMenu->addAction(L("另存为", "Save as"), this, [this] { saveTheme(true); });
-    themeMenu->addSeparator();
-    deleteThemeAction = themeMenu->addAction(L("删除主题", "Delete theme"), this, [this] { deleteTheme(path); });
-    themeMenu->addAction(L("恢复内置主题", "Restore built-in themes"), this, &MainWindow::restoreBuiltinThemes);
-    sendButton = button({}, heading, [this] { toggleSend(); });
-    cv->addLayout(heading);
-    auto tools = new QHBoxLayout;
-    undoButton = button(L("撤销", "Undo"), tools, [this] { undo(); });
-    redoButton = button(L("重做", "Redo"), tools, [this] { redo(); });
-    auto toolBox = new QComboBox;
-    for (auto p : QList<QPair<QString, QString>>{{"move", L("移动", "Move")},
-                                                 {"text", L("文字", "Text")},
-                                                 {"rectangle", L("矩形", "Rectangle")},
-                                                 {"ellipse", L("椭圆", "Ellipse")},
-                                                 {"line", L("直线", "Line")}})
-        toolBox->addItem(p.second, p.first);
-    tools->addWidget(toolBox);
-    button(L("适应窗口", "Fit"), tools, [this] { canvas->setFit(true); });
-    button("1:1", tools, [this] { canvas->setZoom(1); });
-    button("−", tools,
-           [this] { canvas->setZoom(canvas->screenRect().width() / theme.size().width() / 1.2); });
-    button("+", tools,
-           [this] { canvas->setZoom(canvas->screenRect().width() / theme.size().width() * 1.2); });
-    cv->addLayout(tools);
+    left = layers;
     auto scroll = new QScrollArea;
     scroll->setWidgetResizable(true);
     canvas = new Canvas;
+    canvas->setObjectName("editorCanvas");
+    canvas->setMinimumSize(200, 160);
+    canvas->editing = true;
     canvas->setToolTip(L("拖动组合可整体移动；Alt+单击或双击可选择内部图层。也可在图层树中直接选择。",
                          "Drag a group to move it together. Alt-click or double-click selects a child; "
                          "individual layers can also be selected in the layer tree."));
@@ -440,9 +611,8 @@ void MainWindow::buildThemePage(QWidget *w) {
     options->addWidget(snap);
     connect(snap, &QCheckBox::toggled, this, [this](bool v) { canvas->snap = v; });
     options->addStretch();
-    label(L("预览与副屏使用相同像素", "Preview and device share the same pixels"), options);
     cv->addLayout(options);
-    splitter->addWidget(center);
+    editorSplit->addWidget(center);
     connect(canvas, &Canvas::selectionChanged, this, [this] {
         building = true;
         QTreeWidgetItemIterator it(tree);
@@ -452,6 +622,8 @@ void MainWindow::buildThemePage(QWidget *w) {
         }
         building = false;
         properties();
+        if (!canvas->selected.isEmpty())
+            inspectorTabs->setCurrentIndex(1);
     });
     connect(canvas, &Canvas::transientEdited, this, [this] {
         if (!renderTimer.isActive())
@@ -460,80 +632,23 @@ void MainWindow::buildThemePage(QWidget *w) {
     connect(canvas, &Canvas::committed, this, &MainWindow::remember);
     connect(canvas, &Canvas::createRequested, this, &MainWindow::createLayer);
     connect(canvas, &Canvas::contextRequested, this, &MainWindow::contextMenu);
-    auto rightPanel = new QFrame;
-    rightPanel->setFrameShape(QFrame::StyledPanel);
-    right = rightPanel;
+    inspectorTabs = new QTabWidget;
+    inspectorTabs->setObjectName("inspectorTabs");
+    inspectorTabs->setMinimumSize(260, 140);
+    inspectorTabs->addTab(layers, L("图层", "Layers"));
+    auto propertyScroll = new QScrollArea;
+    propertyScroll->setWidgetResizable(true);
+    propertyScroll->setFrameShape(QFrame::NoFrame);
+    right = new QWidget;
     auto rv = new QVBoxLayout(right);
-    rv->setContentsMargins(16, 16, 16, 16);
-    label(L("设备", "Device"), rv);
-    portBox = new QComboBox;
-    rv->addWidget(portBox);
-    auto connectionButtons = new QHBoxLayout;
-    connectButton = button({}, connectionButtons, [this] { connectDevice(); });
-    button(L("刷新", "Refresh"), connectionButtons, [this] { refreshPorts(); });
-    rv->addLayout(connectionButtons);
-    auto form = new QFormLayout;
-    directionBox = new QComboBox;
-    for (auto directionText : {L("竖屏", "Portrait"), L("反向竖屏", "Reverse portrait"),
-                               L("横屏", "Landscape"), L("反向横屏", "Reverse landscape")})
-        directionBox->addItem(directionText);
-    directionBox->setCurrentIndex(theme.orientation());
-    directionBox->setToolTip(L("方向按主题自动保存，切换主题或重启后会恢复。保存主题 JSON 时也会携带方向。",
-                               "Orientation is remembered per theme across switches and restarts, "
-                               "and is included when saving the theme JSON."));
-    form->addRow(L("主题方向", "Theme orientation"), directionBox);
-    brightness = new QSlider(Qt::Horizontal);
-    brightness->setRange(0, 100);
-    brightness->setValue(config.value("brightness").toInt(75));
-    form->addRow(L("亮度", "Brightness"), brightness);
-    mirrorBox = new QCheckBox(L("镜像显示", "Mirror display"));
-    mirrorBox->setChecked(config["mirror"].toBool());
-    form->addRow(mirrorBox);
-    rv->addLayout(form);
-    connect(directionBox, &QComboBox::currentIndexChanged, this, [this](int v) {
-        applyThemeOrientation(v);
-        persist();
-        render();
-    });
-    connect(brightness, &QSlider::sliderReleased, this, [this] {
-        config["brightness"] = brightness->value();
-        device.command(3, brightness->value());
-        persist();
-    });
-    connect(mirrorBox, &QCheckBox::toggled, this, [this](bool v) {
-        config["mirror"] = v;
-        canvas->mirrored = v;
-        canvas->update();
-        device.command(5, int(v));
-        persist();
-    });
-    auto advanced = new QToolButton;
-    advanced->setText(L("高级设备操作", "Advanced device operations"));
-    auto advancedMenu = new QMenu(advanced);
-    advancedMenu->addAction(L("清屏", "Clear"), this, [this] { device.command(6); });
-    advancedMenu->addAction(L("休眠", "Sleep"), this, [this] {
-        sending = false;
-        device.command(8, 0);
-        updateStatus();
-    });
-    advancedMenu->addAction(L("唤醒", "Wake"), this, [this] { device.command(8, 1); });
-    advancedMenu->addAction(L("复位", "Reset"), this, [this] {
-        sending = false;
-        device.command(7);
-        updateStatus();
-    });
-    advanced->setMenu(advancedMenu);
-    advanced->setPopupMode(QToolButton::InstantPopup);
-    rv->addWidget(advanced);
-    advanced->setProperty("deviceOperation", true);
-    auto separator = new QFrame;
-    separator->setFrameShape(QFrame::HLine);
-    rv->addWidget(separator);
+    rv->setContentsMargins(12, 12, 12, 12);
     label(L("图层属性", "Layer properties"), rv);
     auto props = new QFormLayout;
     layerName = new QLineEdit;
     layerText = new QLineEdit;
     bindingBox = new QComboBox;
+    bindingBox->setMinimumContentsLength(12);
+    bindingBox->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
     bindingBox->addItem("--", QString());
     for (auto m : metrics())
         bindingBox->addItem(english ? m.first : m.second, m.first);
@@ -618,11 +733,96 @@ void MainWindow::buildThemePage(QWidget *w) {
     button(L("背景图", "Background"), files, [this] { backgroundImage(); });
     button(L("导出 PNG", "Export PNG"), files, [this] { exportImage(); });
     rv->addLayout(files);
-    splitter->addWidget(right);
-    splitter->setSizes({260, 740, 312});
-    splitter->setStretchFactor(1, 1);
-    left->setMinimumWidth(224);
-    right->setMinimumWidth(280);
+    propertyScroll->setWidget(right);
+    inspectorTabs->addTab(propertyScroll, L("属性", "Properties"));
+    editorSplit->addWidget(inspectorTabs);
+    editorSplit->setStretchFactor(0, 1);
+    editorSplit->setStretchFactor(1, 0);
+    editorSplit->setSizes({720, 280});
+}
+void MainWindow::buildDevicePanel(QWidget *w) {
+    auto layout = new QVBoxLayout(w);
+    layout->setContentsMargins(0, 0, 0, 0);
+    auto scroll = new QScrollArea;
+    scroll->setMinimumSize(220, 70);
+    scroll->setWidgetResizable(true);
+    scroll->setFrameShape(QFrame::NoFrame);
+    scroll->setAlignment(Qt::AlignHCenter | Qt::AlignTop);
+    auto content = new QWidget;
+    auto rv = new QVBoxLayout(content);
+    rv->setContentsMargins(12, 0, 12, 12);
+    label(L("设备", "Device"), rv);
+    auto hint = new QLabel(L("连接 USB 副屏后，可应用当前主题并调整显示参数。", "Connect a USB display to send the current theme and adjust display settings."));
+    hint->setWordWrap(true);
+    rv->addWidget(hint);
+    portBox = new QComboBox;
+    rv->addWidget(portBox);
+    auto connectionButtons = new QHBoxLayout;
+    connectButton = button({}, connectionButtons, [this] { connectDevice(); });
+    button(L("刷新", "Refresh"), connectionButtons, [this] { refreshPorts(); });
+    rv->addLayout(connectionButtons);
+    auto form = new QFormLayout;
+    form->setRowWrapPolicy(QFormLayout::WrapLongRows);
+    directionBox = new QComboBox;
+    for (auto directionText : {L("竖屏", "Portrait"), L("反向竖屏", "Reverse portrait"),
+                               L("横屏", "Landscape"), L("反向横屏", "Reverse landscape")})
+        directionBox->addItem(directionText);
+    directionBox->setCurrentIndex(theme.orientation());
+    directionBox->setToolTip(L("方向按主题自动保存，切换主题或重启后会恢复。保存主题 JSON 时也会携带方向。",
+                               "Orientation is remembered per theme across switches and restarts, "
+                               "and is included when saving the theme JSON."));
+    form->addRow(L("主题方向", "Theme orientation"), directionBox);
+    brightness = new QSlider(Qt::Horizontal);
+    brightness->setRange(0, 100);
+    brightness->setValue(config.value("brightness").toInt(75));
+    form->addRow(L("亮度", "Brightness"), brightness);
+    mirrorBox = new QCheckBox(L("镜像显示", "Mirror display"));
+    mirrorBox->setChecked(config["mirror"].toBool());
+    form->addRow(mirrorBox);
+    rv->addLayout(form);
+    connect(directionBox, &QComboBox::currentIndexChanged, this, [this](int v) {
+        applyThemeOrientation(v);
+        persist();
+        render();
+    });
+    connect(brightness, &QSlider::sliderReleased, this, [this] {
+        config["brightness"] = brightness->value();
+        device.command(3, brightness->value());
+        persist();
+    });
+    connect(mirrorBox, &QCheckBox::toggled, this, [this](bool v) {
+        config["mirror"] = v;
+        canvas->mirrored = v;
+        canvas->update();
+        previewCanvas->mirrored = v;
+        previewCanvas->update();
+        device.command(5, int(v));
+        persist();
+    });
+    auto advanced = new QToolButton;
+    advanced->setText(L("高级设备操作", "Advanced device operations"));
+    auto advancedMenu = new QMenu(advanced);
+    advancedMenu->addAction(L("清屏", "Clear"), this, [this] { device.command(6); });
+    advancedMenu->addAction(L("休眠", "Sleep"), this, [this] {
+        sending = false;
+        device.command(8, 0);
+        updateStatus();
+    });
+    advancedMenu->addAction(L("唤醒", "Wake"), this, [this] { device.command(8, 1); });
+    advancedMenu->addAction(L("复位", "Reset"), this, [this] {
+        sending = false;
+        device.command(7);
+        updateStatus();
+    });
+    advanced->setMenu(advancedMenu);
+    advanced->setPopupMode(QToolButton::InstantPopup);
+    rv->addWidget(advanced);
+    advanced->setProperty("deviceOperation", true);
+    sendButton = button({}, rv, [this] { toggleSend(); });
+    sendButton->setObjectName("sendButton");
+    rv->addStretch();
+    scroll->setWidget(content);
+    layout->addWidget(scroll);
     refreshPorts();
 }
 void MainWindow::buildSensors(QWidget *w) {
@@ -631,7 +831,7 @@ void MainWindow::buildSensors(QWidget *w) {
     label(L("默认每秒采集并更新副屏。内存已用、可用、总量以 GB 显示；无法读取的项目会在来源栏说明原因。",
             "Samples and updates the display every second by default. Used, available and total RAM are shown in GB. "
             "Unavailable sensors show a reason in the source column."),
-          l);
+          l)->setWordWrap(true);
     sensorTable = new QTableWidget(0, 3);
     sensorTable->setHorizontalHeaderLabels({L("项目", "Metric"), L("数值", "Value"), L("来源 / 状态", "Source / status")});
     sensorTable->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
@@ -644,7 +844,9 @@ void MainWindow::buildSettings(QWidget *w) {
     auto scroll = new QScrollArea;
     scroll->setWidgetResizable(true);
     scroll->setFrameShape(QFrame::NoFrame);
+    scroll->setAlignment(Qt::AlignHCenter | Qt::AlignTop);
     auto content = new QWidget;
+    content->setMaximumWidth(820);
     content->setObjectName("settingsContent");
     auto outer = new QVBoxLayout(content);
     scroll->setWidget(content);
@@ -652,6 +854,7 @@ void MainWindow::buildSettings(QWidget *w) {
     label(L("设置", "Settings"), outer);
     auto group = new QGroupBox(L("运行设置", "Behavior"));
     auto form = new QFormLayout(group);
+    form->setRowWrapPolicy(QFormLayout::WrapLongRows);
     auto language = new QComboBox;
     language->addItem("自动 / System", "auto");
     language->addItem("简体中文", "chinese");
@@ -695,35 +898,41 @@ void MainWindow::buildSettings(QWidget *w) {
         config["minimize_to_tray"] = v;
         persist();
     });
-    auto autoLightweight = new QCheckBox(L("关闭主窗口后自动进入轻量模式", "Enter lightweight mode after closing the window"));
+    auto autoLightweight = new QCheckBox(L("关闭窗口后自动进入轻量模式", "Enter lightweight mode after closing the window"));
     autoLightweight->setObjectName("autoLightweight");
     autoLightweight->setChecked(config["auto_lightweight"].toBool());
     form->addRow(autoLightweight);
     auto delay = new QSpinBox;
     delay->setObjectName("lightweightDelay");
-    delay->setRange(1, 86400);
+    delay->setRange(0, 86400);
     delay->setSuffix(" s");
+    delay->setSpecialValueText(L("立即（0 秒）", "Immediately (0 s)"));
     delay->setValue(config.value("lightweight_delay_seconds").toInt(60));
-    delay->setEnabled(autoLightweight->isChecked());
     form->addRow(L("进入轻量模式倒计时", "Lightweight countdown"), delay);
-    const auto updateLightweight = [this, autoLightweight, delay] {
-        config["auto_lightweight"] = autoLightweight->isChecked();
-        config["lightweight_delay_seconds"] = delay->value();
-        delay->setEnabled(autoLightweight->isChecked());
-        persist();
-        emit preferencesChanged();
-    };
-    connect(autoLightweight, &QCheckBox::toggled, this, updateLightweight);
-    connect(delay, &QSpinBox::valueChanged, this, updateLightweight);
+    form->labelForField(delay)->setObjectName("lightweightDelayLabel");
     auto enterLightweight = new QPushButton(L("立即进入轻量模式", "Enter lightweight mode now"));
     enterLightweight->setObjectName("enterLightweight");
     enterLightweight->setEnabled(QSystemTrayIcon::isSystemTrayAvailable());
     connect(enterLightweight, &QPushButton::clicked, this, &MainWindow::lightweightRequested);
     form->addRow(enterLightweight);
-    auto lightweightHint = new QLabel(L("关闭窗口后开始倒计时，重新打开取消。释放界面并继续推送；点击托盘图标恢复编辑。需要系统托盘。",
-        "Countdown starts when you close the window; reopening cancels it. Frees the interface while display updates continue. Restore from the system tray."));
+    auto lightweightHint = new QLabel(L("关闭窗口后开始计时，0 秒立即进入；重新打开取消。释放界面并继续推送，可从系统托盘恢复。",
+        "Closing the window starts the countdown; 0 seconds enters immediately. Reopening cancels it. Display updates continue; restore from the system tray."));
     lightweightHint->setWordWrap(true);
     form->addRow(lightweightHint);
+    const auto showCountdown = [form, delay, lightweightHint](bool enabled) {
+        form->setRowVisible(delay, enabled);
+        form->setRowVisible(lightweightHint, enabled);
+    };
+    showCountdown(autoLightweight->isChecked());
+    const auto updateLightweight = [this, autoLightweight, delay, showCountdown] {
+        config["auto_lightweight"] = autoLightweight->isChecked();
+        config["lightweight_delay_seconds"] = delay->value();
+        showCountdown(autoLightweight->isChecked());
+        persist();
+        emit preferencesChanged();
+    };
+    connect(autoLightweight, &QCheckBox::toggled, this, updateLightweight);
+    connect(delay, &QSpinBox::valueChanged, this, updateLightweight);
     auto disk = new QComboBox;
     disk->addItem(L("系统分区", "System drive"), QString());
     for (auto d : QStorageInfo::mountedVolumes())
@@ -758,10 +967,6 @@ void MainWindow::buildSettings(QWidget *w) {
     weatherCredit->setWordWrap(true);
     form->addRow(weatherCredit);
     outer->addWidget(group);
-    label(L("原生界面，按需绘制；无浏览器、无动画循环。天气可按需开启；音量异步采集。",
-            "Native interface with on-demand painting, no browser or animation loop. Weather is optional; "
-            "audio queries run asynchronously."),
-          outer);
     outer->addStretch();
     auto buttons = new QHBoxLayout;
     button(L("打开数据目录", "Open data folder"), buttons,
@@ -826,26 +1031,96 @@ void MainWindow::buildDiagnostics(QWidget *w) {
     l->addLayout(row);
 }
 void MainWindow::setPage(int n) {
+    if (n < 0 || n >= PageCount)
+        return;
     page = n;
-    runtime->preview = isVisible() && page == 0;
+    const QSignalBlocker blocker(navigation);
+    navigation->setCurrentRow(n);
     pages->setCurrentIndex(n);
-    if (n == 2) startup->refresh();
-    if (n == 1)
+    editing = n == EditorPage;
+    canvas->editing = editing;
+    canvas->update();
+    const bool themePage = n == LibraryPage || n == EditorPage;
+    runtime->preview = isVisible() && themePage;
+    pageTitle->setText(navigation->item(n)->data(Qt::UserRole).toString());
+    setWindowTitle(pageTitle->text() + L(" · 图灵智显", " · Turing Screen"));
+    title->setVisible(themePage);
+    resolution->setVisible(themePage && pages->width() >= 850);
+    modeButton->setVisible(themePage);
+    modeButton->setText(n == EditorPage ? L("返回预览", "Back to preview") : L("编辑主题", "Edit theme"));
+    saveButton->setVisible(n == EditorPage);
+    if (building)
+        return;
+    if (n == SettingsPage) startup->refresh();
+    if (n == SensorsPage)
         tick();
-    if (n == 3)
+    if (n == DiagnosticsPage)
         diagnosticText->setPlainText(QString::fromUtf8(QJsonDocument(diagnostics()).toJson()));
-    if (n == 0) {
+    if (themePage) {
         render();
-        thumbnails();
+        QTimer::singleShot(0, this, [this] {
+            if (page == LibraryPage) {
+                library->doItemsLayout();
+                thumbnails();
+            }
+        });
     }
 }
 void MainWindow::setEditing(bool value) {
-    editing = value;
-    canvas->editing = value;
-    modeButton->setText(value ? L("切换到预览", "Switch to preview") : L("切换到编辑", "Switch to edit"));
-    leftPages->setCurrentIndex(value ? 1 : 0);
-    canvas->update();
+    setPage(value ? EditorPage : LibraryPage);
     properties();
+}
+void MainWindow::setSidebarExpanded(bool expanded) {
+    if (!sidebar || !navigation)
+        return;
+    sidebarExpanded = expanded;
+    sidebar->setFixedWidth(expanded ? 208 : 60);
+    sidebarToggle->setArrowType(expanded ? Qt::LeftArrow : Qt::RightArrow);
+    const auto description = expanded ? L("收起功能栏", "Collapse sidebar") : L("展开功能栏", "Expand sidebar");
+    sidebarToggle->setToolTip(description);
+    sidebarToggle->setAccessibleName(description);
+    for (int n = 0; n < navigation->count(); ++n) {
+        auto item = navigation->item(n);
+        item->setText(expanded ? item->data(Qt::UserRole).toString() : QString());
+    }
+    sidebar->findChild<QToolButton *>("sidebarLightweight")->setToolButtonStyle(
+        expanded ? Qt::ToolButtonTextBesideIcon : Qt::ToolButtonIconOnly);
+}
+void MainWindow::updateResponsiveLayout() {
+    if (!pages || !librarySplit || !editorSplit)
+        return;
+    const auto reflow = [](QSplitter *splitter, bool vertical, const QList<int> &wideSizes,
+                           const QList<int> &narrowSizes) {
+        const auto orientation = vertical ? Qt::Vertical : Qt::Horizontal;
+        if (splitter->orientation() != orientation) {
+            splitter->setOrientation(orientation);
+            splitter->setSizes(vertical ? narrowSizes : wideSizes);
+        }
+    };
+    const bool compactPreview = pages->width() < 900;
+    library->setMaximumWidth(compactPreview ? QWIDGETSIZE_MAX : 320);
+    devicePanel->setMaximumWidth(compactPreview ? QWIDGETSIZE_MAX : 340);
+    const auto mode = compactPreview ? QListView::IconMode : QListView::ListMode;
+    const auto flow = compactPreview ? QListView::LeftToRight : QListView::TopToBottom;
+    const auto grid = compactPreview
+        ? QSize(qMax(1, (library->viewport()->width() - 4 * library->spacing()) / 2),
+                qMax(104, library->iconSize().height() + 2 * library->fontMetrics().height() + 12))
+        : QSize();
+    const bool relayout = library->viewMode() != mode || library->flow() != flow || library->isWrapping() != compactPreview ||
+                          library->gridSize() != grid;
+    if (library->viewMode() != mode) library->setViewMode(mode);
+    library->setMovement(QListView::Static);
+    if (library->flow() != flow) library->setFlow(flow);
+    if (library->isWrapping() != compactPreview) library->setWrapping(compactPreview);
+    if (library->gridSize() != grid) library->setGridSize(grid);
+    if (relayout)
+        for (int i = 0; i < library->count(); ++i)
+            library->item(i)->setSizeHint(compactPreview ? grid : QSize(220, 80));
+    reflow(librarySplit, compactPreview, {250, 650, 280}, {180, 260, 180});
+    reflow(editorSplit, pages->width() < 820, {720, 300}, {360, 260});
+    if (relayout && library->isVisible()) library->doItemsLayout();
+    resolution->setVisible((page == LibraryPage || page == EditorPage) && pages->width() >= 850);
+    QTimer::singleShot(0, this, &MainWindow::thumbnails);
 }
 void MainWindow::buildLibrary() {
     QSignalBlocker b(library);
@@ -859,14 +1134,19 @@ void MainWindow::buildLibrary() {
                 .arg(size.width() > size.height() ? L("横屏", "Landscape") : L("竖屏", "Portrait")),
             library);
         i->setData(Qt::UserRole, path);
-        i->setSizeHint(QSize(224, 76));
+        i->setSizeHint(library->viewMode() == QListView::IconMode ? library->gridSize() : QSize(220, 80));
+        i->setToolTip(i->text());
         i->setHidden(search && !i->text().contains(search->text(), Qt::CaseInsensitive));
         if (path == this->path)
-            i->setSelected(true);
+            library->setCurrentItem(i);
     };
     add({}, L("系统概览", "System overview"), QSize(480, 320));
     for (auto e : entries)
         add(e.path, e.name, e.size);
+    bool matches = false;
+    for (int n = 0; n < library->count(); ++n)
+        matches |= !library->item(n)->isHidden();
+    libraryEmpty->setVisible(!matches);
     updateThemeActions();
     QTimer::singleShot(0, this, &MainWindow::thumbnails);
 }
@@ -920,8 +1200,8 @@ void MainWindow::reloadLibrary() {
         } catch (const std::exception &) {
         }
     };
-    for (const auto &root : {assets() + "/themes", assets() + "/official/config", dataDir + "/themes"}) {
-        QDirIterator files(root, {"*.data", "*.json"}, QDir::Files, QDirIterator::Subdirectories);
+    for (const auto &directory : {assets() + "/themes", assets() + "/official/config", dataDir + "/themes"}) {
+        QDirIterator files(directory, {"*.data", "*.json"}, QDir::Files, QDirIterator::Subdirectories);
         while (files.hasNext())
             add(files.next());
     }
@@ -1105,7 +1385,7 @@ void MainWindow::restoreBuiltinThemes() {
     buildLibrary();
 }
 void MainWindow::thumbnails() {
-    if (!library || page != 0 || !isVisible() || leftPages->currentIndex() != 0)
+    if (!library || page != LibraryPage || !isVisible())
         return;
     int count = 0;
     std::unique_ptr<Renderer> thumbnailRenderer;
@@ -1126,13 +1406,15 @@ void MainWindow::thumbnails() {
             if (!thumbnailRenderer) thumbnailRenderer = std::make_unique<Renderer>();
             auto t = file.isEmpty() ? Theme::starter() : Theme::load(file);
             const auto pixmap = QPixmap::fromImage(
-                thumbnailRenderer->render(t, sample).scaled(88, 60, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+                thumbnailRenderer->render(t, sample).scaled(library->iconSize(), Qt::KeepAspectRatio, Qt::SmoothTransformation));
             i->setIcon(pixmap);
             thumbnailCache.insert(key, new QPixmap(pixmap), int(pixmap.width() * pixmap.height() * 4));
             ++count;
         } catch (const std::exception &) {
         }
     }
+    if (count == 10)
+        QTimer::singleShot(0, this, &MainWindow::thumbnails);
 }
 void MainWindow::buildTree() {
     if (!tree)
@@ -1337,6 +1619,14 @@ void MainWindow::choose(const QString &file) {
         configureWeather();
         includeTheme(file);
         updateThemeActions();
+        {
+            const QSignalBlocker blocker(library);
+            for (int n = 0; n < library->count(); ++n)
+                if (libraryKey(library->item(n)->data(Qt::UserRole).toString()) == libraryKey(path)) {
+                    library->setCurrentItem(library->item(n));
+                    break;
+                }
+        }
         persist();
         render();
     } catch (const std::exception &e) {
@@ -1667,15 +1957,18 @@ void MainWindow::refreshRuntimeUi() {
     if (!frame.isNull()) {
         canvas->mirrored = config["mirror"].toBool();
         canvas->setFrame(frame);
+        previewCanvas->mirrored = canvas->mirrored;
+        previewCanvas->setFrame(frame);
     }
     title->setText(theme.name() + (dirty ? " *" : ""));
+    title->setToolTip(title->text());
     resolution->setText(QString("%1 × %2 · %3").arg(theme.size().width()).arg(theme.size().height())
                            .arg(theme.size().width() > 320 ? L("横屏", "Landscape") : L("竖屏", "Portrait")));
-    undoButton->setEnabled(!undoHistory.isEmpty());
-    redoButton->setEnabled(!redoHistory.isEmpty());
+    undoAction->setEnabled(!undoHistory.isEmpty());
+    redoAction->setEnabled(!redoHistory.isEmpty());
     updateStatus();
     if (!runtime->error.isEmpty()) status->setText(runtime->error);
-    if (page == 1 && isVisible()) {
+    if (page == SensorsPage && isVisible()) {
         const auto &m = metrics();
         sensorTable->setRowCount(int(m.size()));
         for (int n = 0; n < m.size(); ++n) {
@@ -1907,7 +2200,7 @@ void MainWindow::runSmoke(const QString &dir, bool stress, int seconds) {
     resourceClock.restart();
     resourceSamples = {};
     auto timer = new QTimer(this);
-    timer->setInterval(stress ? 250 : 200);
+    timer->setInterval(stress ? 250 : 500);
     auto step = std::make_shared<int>(0);
     connect(timer, &QTimer::timeout, this, [this, dir, stress, seconds, step, timer] {
         recordResource();
@@ -1945,7 +2238,7 @@ void MainWindow::runSmoke(const QString &dir, bool stress, int seconds) {
                     redo();
             } else if (elapsed < 54) {
                 workloadStage = "pages";
-                setPage(n % 4);
+                setPage(n % PageCount);
             } else if (elapsed < 58) {
                 if (workloadStage != "tray") {
                     workloadStage = "tray";
@@ -1957,24 +2250,64 @@ void MainWindow::runSmoke(const QString &dir, bool stress, int seconds) {
             } else {
                 if (!isVisible())
                     show();
-                setPage(0);
+                setPage(LibraryPage);
                 workloadStage = "steady";
             }
         } else {
-            static const char *names[]{"preview", "editor", "sensors", "settings", "diagnostics", "english"};
-            if (n < 6) {
-                if (n == 1)
-                    setEditing(true);
-                if (n >= 2 && n <= 4) {
-                    navigation->setCurrentIndex(n - 1);
-                }
+            static const char *names[]{"library", "editor", "sensors", "settings", "diagnostics",
+                                       "compact-library", "compact-editor", "compact-properties", "english",
+                                       "expanded-library", "expanded-editor", "settings-auto-lightweight"};
+            if (n < 12) {
+                if (n < PageCount)
+                    setPage(n);
                 if (n == 5) {
-                    navigation->setCurrentIndex(0);
+                    resize(760, 680);
+                    setPage(LibraryPage);
+                }
+                if (n == 6)
+                    setPage(EditorPage);
+                if (n == 7) {
+                    inspectorTabs->setCurrentIndex(1);
+                    if (!theme.layers().isEmpty())
+                        selection({theme.layers().first().toObject()["id"].toString()});
+                }
+                if (n == 8) {
+                    resize(1280, 820);
                     english = true;
                     build();
                     render();
                 }
-                QTimer::singleShot(80, this, [this, dir, n] { grab().save(dir + "/" + names[n] + ".png"); });
+                if (n == 9) {
+                    english = false;
+                    build();
+                    setSidebarExpanded(true);
+                    setPage(LibraryPage);
+                }
+                if (n == 10)
+                    setPage(EditorPage);
+                if (n == 11) {
+                    setPage(SettingsPage);
+                    findChild<QCheckBox *>("autoLightweight")->setChecked(true);
+                    findChild<QSpinBox *>("lightweightDelay")->setValue(0);
+                }
+                timer->stop();
+                QTimer::singleShot(100, this, [this, dir, n, timer] {
+                    grab().save(dir + "/" + names[n] + ".png");
+                    QJsonArray positions;
+                    for (int i = 0; i < qMin(6, library->count()); ++i) {
+                        const auto rect = library->visualItemRect(library->item(i));
+                        positions.append(QJsonObject{{"x", rect.x()}, {"y", rect.y()},
+                                                     {"width", rect.width()}, {"height", rect.height()}});
+                    }
+                    QFile layoutFile(dir + "/" + names[n] + "-layout.json");
+                    if (layoutFile.open(QIODevice::WriteOnly))
+                        layoutFile.write(QJsonDocument(QJsonObject{
+                            {"viewport_width", library->viewport()->width()},
+                            {"grid_width", library->gridSize().width()},
+                            {"flow", int(library->flow())}, {"wrapping", library->isWrapping()},
+                            {"items", positions}}).toJson());
+                    timer->start();
+                });
             }
         }
         if (elapsed >= seconds) {

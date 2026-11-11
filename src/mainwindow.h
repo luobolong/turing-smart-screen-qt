@@ -14,7 +14,8 @@
 class QListWidget;
 class QTreeWidget;
 class QTreeWidgetItem;
-class QTabBar;
+class QTabWidget;
+class QToolButton;
 class QLabel;
 class QPushButton;
 class QComboBox;
@@ -57,6 +58,8 @@ protected:
     void closeEvent(QCloseEvent *) override;
     void showEvent(QShowEvent *) override;
     void hideEvent(QHideEvent *) override;
+    void resizeEvent(QResizeEvent *) override;
+    bool eventFilter(QObject *, QEvent *) override;
 
 private:
     struct Entry {
@@ -76,7 +79,9 @@ private:
     bool english = false, editing = false, building = false, quitting = false, dirty = false;
     bool &sending;
     std::function<bool()> trayAvailable = QSystemTrayIcon::isSystemTrayAvailable;
-    int page = 0;
+    enum Page { LibraryPage, EditorPage, SensorsPage, SettingsPage, DiagnosticsPage, PageCount };
+    int page = LibraryPage;
+    bool sidebarExpanded = false;
     QVector<Entry> entries;
     QHash<QString, Document> drafts;
     QList<QJsonObject> undoHistory, redoHistory;
@@ -88,18 +93,24 @@ private:
     QImage &frame;
     QTimer &sampling;
     QTimer renderTimer;
-    QWidget *root = nullptr, *left = nullptr, *right = nullptr;
-    QStackedWidget *pages = nullptr, *leftPages = nullptr;
+    QWidget *root = nullptr, *titleBar = nullptr, *sidebar = nullptr, *devicePanel = nullptr,
+            *left = nullptr, *right = nullptr;
+    QStackedWidget *pages = nullptr;
+    QSplitter *librarySplit = nullptr, *editorSplit = nullptr;
+    QTabWidget *inspectorTabs = nullptr;
+    QToolButton *sidebarToggle = nullptr;
     QListWidget *library = nullptr;
     QTreeWidget *tree = nullptr;
     QLineEdit *search = nullptr;
     Canvas *canvas = nullptr;
-    QTabBar *navigation = nullptr;
+    Canvas *previewCanvas = nullptr;
+    QListWidget *navigation = nullptr;
+    QLabel *pageTitle = nullptr, *libraryEmpty = nullptr;
     QLabel *title = nullptr, *resolution = nullptr, *connection = nullptr, *status = nullptr,
            *sendState = nullptr, *dataState = nullptr;
-    QPushButton *modeButton = nullptr, *connectButton = nullptr, *sendButton = nullptr, *undoButton = nullptr,
-                *redoButton = nullptr, *deleteThemeButton = nullptr;
-    QAction *deleteThemeAction = nullptr;
+    QPushButton *modeButton = nullptr, *connectButton = nullptr, *sendButton = nullptr,
+                *deleteThemeButton = nullptr, *saveButton = nullptr;
+    QAction *deleteThemeAction = nullptr, *undoAction = nullptr, *redoAction = nullptr;
     QComboBox *portBox = nullptr, *directionBox = nullptr, *bindingBox = nullptr;
     QSlider *brightness = nullptr;
     QLineEdit *layerName = nullptr, *layerText = nullptr;
@@ -117,7 +128,11 @@ private:
     int workflowEdits = 0, workflowSwitches = 0;
     QString L(const char *zh, const char *en) const;
     void build();
-    void buildThemePage(QWidget *page);
+    void buildLibraryPage(QWidget *page);
+    void buildEditorPage(QWidget *page);
+    void buildDevicePanel(QWidget *panel);
+    void setSidebarExpanded(bool expanded);
+    void updateResponsiveLayout();
     void buildSensors(QWidget *page);
     void buildSettings(QWidget *page);
     void updateStartupUi();
