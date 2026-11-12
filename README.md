@@ -6,8 +6,8 @@
 
 ## 使用
 
-- Windows：完整解压 Windows 压缩包，运行 `turing-screen-qt.exe`。旁边的 DLL、plugins、assets 必须保留。
-- Linux：解压后运行 `./run.sh`。预编译包采用 Arch Linux / glibc 2.44 构建；其他发行版建议从源码编译。桌面需提供 X11 或 Wayland 及相应图形系统库；音量需要正在运行的 PulseAudio 或 PipeWire-Pulse 服务。
+- Windows：运行 `turing-screen-qt-<版本>-windows-x64-installer.exe` 安装包，按当前用户安装，无需管理员权限；安装器创建开始菜单快捷方式、卸载项和可选桌面快捷方式。便携版仍可完整解压 Windows 压缩包后运行 `turing-screen-qt.exe`，旁边的 DLL、plugins、assets 必须保留。
+- Linux：解压 `turing-screen-qt-<版本>-linux-x64.tar.gz` 后运行 `./run.sh`；CI 包使用 Ubuntu 24.04 / glibc 2.39 构建并附带 Qt 6.8.3 运行库，本地打包脚本生成的包使用本机 Qt 与 glibc。桌面需提供 X11 或 Wayland 及相应图形系统库；音量需要正在运行的 PulseAudio 或 PipeWire-Pulse 服务。
 - Nix / NixOS：在源码目录执行 `nix run path:.`，或用 `nix build path:.` 构建。包自带运行资源与桌面入口，详见下方 Nix 说明。
 - 首次自动跟随系统语言；“设置”可选中文 / English、采样间隔、分区及关闭到托盘，外观跟随系统 Qt 设置。
 - 未连接硬件也能预览、编辑和采集本机数据。连接串口后点击“应用到副屏”开始发送。
@@ -91,7 +91,7 @@ Linux 沿用桌面已有的 Qt 6 设置，包括 Kvantum、qt6ct 和 KDE 的样�
 ./scripts/package-windows.ps1 -QtRoot C:/Qt/6.8.0/msvc2022_64
 ```
 
-Windows 分发应使用打包脚本生成的 `dist` 目录或 ZIP，包含 Qt DLL、平台与原生样式插件及 MSVC 运行库；仅复制编译得到的 EXE 无法在没有 Qt 环境的机器上运行。已有发布目录会被保留，可通过 `-Destination dist/自定义目录名` 生成新的完整包。
+Windows 分发可使用 CI 生成的安装包，也可用 `scripts/package-windows.ps1` 生成包含 Qt DLL、平台与原生样式插件及 MSVC 运行库的便携 ZIP；仅复制编译得到的 EXE 无法在没有 Qt 环境的机器上运行。安装包由 `scripts/windows-installer.nsi` 生成，默认安装到 `%LOCALAPPDATA%\Programs\Turing Screen`，卸载时保留用户数据。已有便携发布目录会被保留，可通过 `-Destination dist/自定义目录名` 生成新的完整包。
 
 ```sh
 ./scripts/build-linux.sh
@@ -102,7 +102,12 @@ Windows 分发应使用打包脚本生成的 `dist` 目录或 ZIP，包含 Qt DL
 
 本机验证使用 Windows 11 / Qt 6.8.0 / MSVC 2022 和 WSLg Arch Linux / Qt 6.11.1 / GCC 16。Windows 默认使用 GDI 字体后端，减少本环境中 DirectWrite 首次绘制的内存开销；仍可用 `QT_QPA_PLATFORM` 显式覆盖。
 
-GitHub Actions 的 [Build and test](.github/workflows/ci.yml) 在 push、pull request 和手动触发时，使用 Qt 6.8.3 分别在 Ubuntu 24.04 / GCC 与 Windows Server 2022 / MSVC 上执行 Release 构建、core / GUI / startup 测试和 Nightfall 示例渲染。测试报告、日志和预览图作为 artifacts 保留 7 天；不包含 Nix 检查。
+GitHub Actions 的 [Build, test and package](.github/workflows/ci.yml) 在 push、pull request 和手动触发时，使用 Qt 6.8.3 分别在 Ubuntu 24.04 / GCC 与 Windows Server 2022 / MSVC 上执行 Release 构建、core / GUI / startup 测试和 Nightfall 示例渲染。非 pull request 运行（push 与手动触发）还会构建发布包，在对应 workflow run 的 Artifacts 中保留 30 天：
+
+- Linux：`turing-screen-qt-<版本>-linux-x64.tar.gz`，包含 Qt 6.8.3 运行库、插件、资源与 `run.sh`；打包后会先运行包内程序完成版本与主题渲染冒烟测试。
+- Windows：`turing-screen-qt-<版本>-windows-x64-installer.exe`，由 `windeployqt` 部署 Qt DLL、平台 / 样式 / TLS 插件与 MSVC 运行库，再由 NSIS 生成按用户安装的安装包。安装包未做代码签名，Windows SmartScreen 可能显示提示。
+
+测试报告、日志和预览图作为 artifacts 保留 7 天；不包含 Nix 检查。
 
 ## 开机启动
 

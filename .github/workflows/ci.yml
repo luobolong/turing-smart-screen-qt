@@ -1,4 +1,4 @@
-name: Build and test
+name: Build, test and package
 
 on:
   push:
@@ -16,7 +16,7 @@ jobs:
   build:
     name: ${{ matrix.platform }} / Qt 6.8.3
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 25
+    timeout-minutes: 35
     strategy:
       fail-fast: false
       matrix:
@@ -72,6 +72,256 @@ jobs:
         run: >-
           ./build/ci/${{ matrix.executable }} --render-theme assets/themes/nightfall.json
           --snapshot tests/fixtures/nightfall-sample.json --output build/ci/nightfall.png
+
+      - name: Read project version
+        id: version
+        shell: bash
+        run: |
+          version=$(sed -n 's/^project(TuringScreenQt VERSION \([0-9][0-9.]*\).*/\1/p' CMakeLists.txt)
+          test -n "$version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Build Linux tar.gz
+        if: runner.os == 'Linux' && github.event_name != 'pull_request'
+        shell: bash
+        run: |
+          set -euo pipefail
+          version='${{ steps.version.outputs.version }}'
+          qt_root="${QT_ROOT_DIR:?QT_ROOT_DIR is not set}"
+          name="turing-screen-qt-${version}-linux-x64"
+          stage="dist/${name}"
+          rm -rf "$stage"
+          mkdir -p "$stage"
+          cmake --install build/ci --prefix "$PWD/$stage"
+
+          mkdir -p "$stage/lib" "$stage/licenses" "$stage/plugins/platforms" \
+            "$stage/plugins/imageformats" "$stage/plugins/tls" "$stage/plugins/networkinformation"
+          cp -L "$qt_root"/lib/libQt6*.so.6 "$stage/lib/"
+          for plugin in libqxcb.so libqwayland.so libqwayland-egl.so libqoffscreen.so libqminimal.so; do
+            test ! -f "$qt_root/plugins/platforms/$plugin" || cp "$qt_root/plugins/platforms/$plugin" "$stage/plugins/platforms/"
+          done
+          for plugin in libqjpeg.so libqgif.so libqico.so; do
+            test ! -f "$qt_root/plugins/imageformats/$plugin" || cp "$qt_root/plugins/imageformats/$plugin" "$stage/plugins/imageformats/"
+          done
+          test -f "$qt_root/plugins/tls/libqopensslbackend.so" || {
+            echo "Qt OpenSSL TLS plugin not found in $qt_root/plugins/tls" >&2
+            exit 1
+          }
+          cp "$qt_root/plugins/tls/libqopensslbackend.so" "$stage/plugins/tls/"
+          for kind in wayland-shell-integration wayland-decoration-client wayland-graphics-integration-client \
+            wayland-windowmanager-integration networkinformation; do
+            if [ -d "$qt_root/plugins/$kind" ]; then
+              mkdir -p "$stage/plugins/$kind"
+              cp -a "$qt_root/plugins/$kind/." "$stage/plugins/$kind/"
+            fi
+          done
+
+          # Bundle everything the executable and Qt plugins need except the C library,
+          # graphics/display stack and desktop libraries that must come from the host.
+          export LD_LIBRARY_PATH="$qt_root/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          skip_re='^(libc|libm|libdl|libpthread|librt|libresolv|libutil|libnsl|libcrypt|libanl)\.so\.'
+          skip_re+='|^(ld-linux|linux-vdso)'
+          skip_re+='|^(libX11|libxcb|libXext|libXrender|libXi\.so|libXfixes|libXcursor|libXrandr|libXinerama|libXau|libXdmcp)'
+          skip_re+='|^(libGL|libEGL|libOpenGL|libdrm|libgbm|libwayland|libxkbcommon|libfontconfig|libfreetype|libharfbuzz|libpng|libjpeg|libz\.so|libbz2|liblzma|libbrotli|libgraphite2)'
+          skip_re+='|^(libglib|libgobject|libgio|libdbus-1|libexpat|libuuid|libsystemd|libudev|libasound|libpipewire|libssl|libcrypto|libxml2|libselinux|libmount|libblkid|libcap|libgcrypt|libgpg-error|libkrb5|libk5crypto|libcom_err|liblber|libldap|libsasl2|libkeyutils|libgssapi)'
+          for _ in 1 2 3; do
+            mapfile -t targets < <(
+              printf '%s\n' "$stage/turing-screen-qt"
+              find "$stage/lib" "$stage/plugins" -type f \( -name '*.so' -o -name '*.so.*' \) -print
+            )
+            while IFS= read -r library; do
+              base=${library##*/}
+              if [[ $base =~ $skip_re ]]; then
+                continue
+              fi
+              test -e "$stage/lib/$base" || cp -L "$library" "$stage/lib/"
+            done < <(for target in "${targets[@]}"; do ldd "$target" 2>/dev/null || true; done |
+              awk '/=> \// {print $3}' | sort -u)
+          done
+          missing=$(LD_LIBRARY_PATH="$stage/lib" ldd "$stage/turing-screen-qt" 2>/dev/null |
+            awk '/not found/ {print $1}' || true)
+          if [ -n "$missing" ]; then
+            echo "Missing runtime libraries:" >&2
+            echo "$missing" >&2
+            exit 1
+          fi
+
+          cp LICENSE "$stage/licenses/Qt-GPL-3.0.txt"
+          printf '[Paths]\nPrefix=.\nPlugins=plugins\n' > "$stage/qt.conf"
+          cat > "$stage/run.sh" <<'SH'
+          #!/usr/bin/env sh
+          set -eu
+          app_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+          export QT_PLUGIN_PATH="$app_dir/plugins${QT_PLUGIN_PATH:+:$QT_PLUGIN_PATH}"
+          for qtpaths_command in qtpaths6 qtpaths; do
+              if command -v "$qtpaths_command" >/dev/null 2>&1; then
+                  qt_version=$("$qtpaths_command" --qt-version 2>/dev/null || true)
+                  case "$qt_version" in
+                      6.*)
+                          system_plugins=$("$qtpaths_command" --plugin-dir 2>/dev/null || true)
+                          if [ -d "$system_plugins" ]; then
+                              export QT_PLUGIN_PATH="$QT_PLUGIN_PATH:$system_plugins"
+                          fi
+                          break
+                          ;;
+                  esac
+              fi
+          done
+          export LD_LIBRARY_PATH="$app_dir/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          exec "$app_dir/turing-screen-qt" "$@"
+          SH
+          chmod +x "$stage/run.sh" "$stage/turing-screen-qt"
+          {
+            uname -m
+            getconf GNU_LIBC_VERSION
+            ldd --version 2>/dev/null | head -n 1 || true
+          } > "$stage/BUILD-ENVIRONMENT.txt"
+
+          QT_QPA_PLATFORM=offscreen "$stage/run.sh" --version
+          QT_QPA_PLATFORM=offscreen "$stage/run.sh" --render-theme assets/themes/nightfall.json \
+            --snapshot tests/fixtures/nightfall-sample.json --output build/ci/nightfall-package.png
+          test -s build/ci/nightfall-package.png
+
+          tar -C dist -czf "dist/${name}.tar.gz" "$name"
+          ls -lh "dist/${name}.tar.gz"
+
+      - name: Upload Linux package
+        if: runner.os == 'Linux' && github.event_name != 'pull_request'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: turing-screen-qt-${{ steps.version.outputs.version }}-linux-x64
+          path: dist/*-linux-x64.tar.gz
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+
+      - name: Build Windows installer
+        if: runner.os == 'Windows' && github.event_name != 'pull_request'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = '${{ steps.version.outputs.version }}'
+          $qtRoot = $env:QT_ROOT_DIR
+          $stage = Join-Path $env:GITHUB_WORKSPACE "dist\turing-screen-qt-$version-windows-x64"
+          if (Test-Path -LiteralPath $stage) {
+              Remove-Item -LiteralPath $stage -Recurse -Force
+          }
+          New-Item -ItemType Directory -Path $stage, "$stage\licenses" -Force | Out-Null
+          Copy-Item -LiteralPath 'build\ci\turing-screen-qt.exe' -Destination $stage
+          Copy-Item -LiteralPath assets, docs -Destination $stage -Recurse
+          Copy-Item -LiteralPath README.md, LICENSE, THIRD_PARTY.md -Destination $stage
+          Copy-Item -LiteralPath LICENSE -Destination "$stage\licenses\Qt-GPL-3.0.txt"
+
+          & "$qtRoot\bin\windeployqt.exe" --release --compiler-runtime --no-translations `
+              --no-opengl-sw --no-system-d3d-compiler --no-system-dxc-compiler --no-quick-import `
+              --no-plugins "$stage\turing-screen-qt.exe"
+          if ($LASTEXITCODE -ne 0) { throw 'windeployqt failed' }
+
+          foreach ($folder in 'platforms', 'imageformats', 'tls', 'networkinformation', 'styles') {
+              New-Item -ItemType Directory -Path "$stage\plugins\$folder" -Force | Out-Null
+          }
+          $pluginRoot = Join-Path $qtRoot 'plugins'
+          foreach ($name in 'qwindows.dll', 'qoffscreen.dll') {
+              Copy-Item -LiteralPath (Join-Path $pluginRoot "platforms\$name") -Destination "$stage\plugins\platforms"
+          }
+          foreach ($name in 'qjpeg.dll', 'qgif.dll', 'qico.dll') {
+              $source = Join-Path $pluginRoot "imageformats\$name"
+              if (Test-Path -LiteralPath $source) {
+                  Copy-Item -LiteralPath $source -Destination "$stage\plugins\imageformats"
+              }
+          }
+          $schannel = Join-Path $pluginRoot 'tls\qschannelbackend.dll'
+          if (-not (Test-Path -LiteralPath $schannel)) {
+              throw 'Qt Schannel TLS plugin is missing'
+          }
+          Copy-Item -LiteralPath $schannel -Destination "$stage\plugins\tls"
+          $styles = Join-Path $pluginRoot 'styles'
+          if (Test-Path -LiteralPath $styles) {
+              Get-ChildItem -LiteralPath $styles -Filter '*.dll' |
+                  Where-Object { $_.Name -notmatch 'd\.dll$' } |
+                  Copy-Item -Destination "$stage\plugins\styles"
+          }
+          $networkInformation = Join-Path $pluginRoot 'networkinformation'
+          if (Test-Path -LiteralPath $networkInformation) {
+              Get-ChildItem -LiteralPath $networkInformation |
+                  Copy-Item -Destination "$stage\plugins\networkinformation" -Recurse
+          }
+
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+          if (Test-Path -LiteralPath $vswhere) {
+              $vsPath = & $vswhere -latest -products * `
+                  -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath |
+                  Select-Object -First 1
+              if ($vsPath) {
+                  $crtRoot = Join-Path $vsPath.Trim() 'VC\Redist\MSVC'
+                  $crtVersion = Get-ChildItem -LiteralPath $crtRoot -Directory -ErrorAction SilentlyContinue |
+                      Where-Object { $_.Name -match '^14\.' } | Sort-Object Name -Descending |
+                      Select-Object -First 1
+                  if ($crtVersion) {
+                      $crtDir = Get-ChildItem -LiteralPath (Join-Path $crtVersion.FullName 'x64') `
+                          -Directory -Filter 'Microsoft.VC14*.CRT' -ErrorAction SilentlyContinue |
+                          Select-Object -First 1
+                      if ($crtDir) {
+                          Copy-Item -Path (Join-Path $crtDir.FullName '*.dll') -Destination $stage -Force
+                      }
+                  }
+              }
+          }
+          if (-not (Test-Path -LiteralPath "$stage\msvcp140.dll")) {
+              throw 'MSVC runtime DLLs are missing from the package'
+          }
+
+          "[Paths]`nPrefix=.`nPlugins=plugins" | Set-Content -LiteralPath "$stage\qt.conf" -Encoding Ascii
+          $versionProcess = Start-Process -FilePath "$stage\turing-screen-qt.exe" `
+              -ArgumentList '--version' -Wait -PassThru
+          if ($versionProcess.ExitCode -ne 0) {
+              throw 'Packaged application failed to start'
+          }
+          $renderProcess = Start-Process -FilePath "$stage\turing-screen-qt.exe" `
+              -ArgumentList @('--render-theme', 'assets\themes\nightfall.json',
+                  '--snapshot', 'tests\fixtures\nightfall-sample.json',
+                  '--output', 'build\ci\nightfall-package.png') -Wait -PassThru
+          if ($renderProcess.ExitCode -ne 0 -or -not (Test-Path -LiteralPath 'build\ci\nightfall-package.png')) {
+              throw 'Packaged theme render failed'
+          }
+
+          $makensis = (Get-Command 'makensis.exe' -ErrorAction SilentlyContinue).Source
+          if (-not $makensis) {
+              $makensis = @(
+                  (Join-Path ${env:ProgramFiles(x86)} 'NSIS\makensis.exe'),
+                  (Join-Path $env:ProgramFiles 'NSIS\makensis.exe')
+              ) | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+          }
+          if (-not $makensis) {
+              choco install nsis -y --no-progress
+              $makensis = 'C:\ProgramData\chocolatey\bin\makensis.exe'
+          }
+          if (-not (Test-Path -LiteralPath $makensis)) {
+              throw 'NSIS makensis.exe was not found'
+          }
+          $parts = @($version.Split('.'))
+          while ($parts.Count -lt 4) { $parts += '0' }
+          $versionQuad = ($parts[0..3] -join '.')
+          $installer = Join-Path $env:GITHUB_WORKSPACE `
+              "dist\turing-screen-qt-$version-windows-x64-installer.exe"
+          & $makensis /V2 "/DAPP_VERSION=$version" "/DAPP_VERSION_QUAD=$versionQuad" `
+              "/DSOURCE_DIR=$stage" "/DOUTPUT_FILE=$installer" `
+              "/DLICENSE_FILE=$env:GITHUB_WORKSPACE\LICENSE" 'scripts\windows-installer.nsi'
+          if ($LASTEXITCODE -ne 0) { throw 'NSIS installer build failed' }
+          if (-not (Test-Path -LiteralPath $installer)) {
+              throw 'Installer was not created'
+          }
+          Get-Item -LiteralPath $installer | Format-List FullName, Length
+
+      - name: Upload Windows installer
+        if: runner.os == 'Windows' && github.event_name != 'pull_request'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: turing-screen-qt-${{ steps.version.outputs.version }}-windows-x64-installer
+          path: dist/*-windows-x64-installer.exe
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
 
       - name: Upload test reports
         if: always()
