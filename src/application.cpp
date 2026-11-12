@@ -24,14 +24,33 @@ ApplicationController::ApplicationController(QString directory, const QString &t
     });
     connect(runtime.get(), &DisplayRuntime::updated, this, &ApplicationController::updateTrayState);
     connect(&runtime->device, &Device::statusChanged, this, &ApplicationController::updateTrayState, Qt::QueuedConnection);
-    if (autostart && trayAvailable())
+    if (autostart)
         runtime->setLightweight(true);
     else
         makeWindow();
     makeTray();
     // Autostart owns the display process as well as the tray: connect the
     // last-used port and resume sending without requiring the editor window.
-    if (autostart) runtime->startSending();
+    if (autostart) {
+        runtime->startSending();
+        // The tray host may start at the same time as the app. Stay headless
+        // and attach the tray once it becomes available instead of showing the
+        // editor as a fallback.
+        if (!trayAvailable()) {
+            trayRetry.setTimerType(Qt::CoarseTimer);
+            trayRetry.setInterval(1000);
+            connect(&trayRetry, &QTimer::timeout, this, [this] {
+                if (!trayAvailable()) {
+                    if (++trayRetryCount >= 60) trayRetry.stop();
+                    return;
+                }
+                trayRetry.stop();
+                tray->hide();
+                makeTray();
+            });
+            trayRetry.start();
+        }
+    }
 }
 ApplicationController::~ApplicationController() {
     editor.reset();

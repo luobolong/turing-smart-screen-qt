@@ -274,7 +274,7 @@ private slots:
                 {"weather_enabled", false}, {"selected_theme", themePath},
                 {"port", screen.port}, {"interval_ms", 1000}}).toJson());
         }
-        ApplicationController app(dir.path(), {}, [] { return true; }, true);
+        ApplicationController app(dir.path(), {}, [] { return false; }, true);
         QVERIFY(app.isLightweight());
         QVERIFY(!app.window());
         auto &runtime = app.display();
@@ -286,22 +286,26 @@ private slots:
         QVERIFY(!runtime.frame.isNull());
         QVERIFY(app.sendAction->isChecked());
         QVERIFY(app.sendAction->isEnabled());
+        QVERIFY(app.lightAction->isChecked());
         QVERIFY(!app.window()); // Connecting and sending never create the editor.
         QTRY_VERIFY(!screen.bytes().isEmpty());
 #else
         QSKIP("Automatic serial connection uses a POSIX PTY");
 #endif
     }
-    void autostartWithoutTrayKeepsWindowAvailable() {
+    void autostartWithoutTrayStaysHeadless() {
         TestProfile dir;
-        ApplicationController app(dir.path(), {}, [] { return false; }, true);
-        QVERIFY(!app.isLightweight());
-        QVERIFY(app.window());
-        app.showWindow();
-        QVERIFY(app.window()->isVisible());
-        QVERIFY(!app.lightAction->isChecked());
-        QVERIFY(!app.enterLightweight());
-        QVERIFY(app.window()->isVisible());
+        bool available = false;
+        ApplicationController app(dir.path(), {}, [&] { return available; }, true);
+        QVERIFY(app.isLightweight());
+        QVERIFY(!app.window());
+        QVERIFY(app.lightAction->isChecked());
+        QVERIFY(!app.lightAction->isEnabled());
+        QVERIFY(app.trayRetry.isActive());
+        available = true;
+        QTRY_VERIFY(!app.trayRetry.isActive());
+        QVERIFY(app.lightAction->isEnabled());
+        QVERIFY(!app.window());
     }
     void trayLightweightToggleRestoresWindowAndReflectsFailures() {
         TestProfile dir;

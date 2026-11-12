@@ -27,6 +27,8 @@ private:
     QSystemTrayIcon *tray;
     QAction *showAction = nullptr, *lightAction = nullptr, *sendAction = nullptr, *quitAction = nullptr;
     QTimer countdown;
+    QTimer trayRetry;
+    int trayRetryCount = 0;
     std::function<bool()> trayAvailable;
     bool closed = false, unsaved = false;
     void makeWindow();
