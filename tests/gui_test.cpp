@@ -938,7 +938,7 @@ private slots:
         QVERIFY(std::any_of(w.entries.begin(), w.entries.end(),
                             [&](const MainWindow::Entry &entry) { return entry.path == file; }));
         w.choose(file);
-        QCOMPARE(w.theme.orientation(), 2);
+        QCOMPARE(w.theme.orientation(), 3);
         QCOMPARE(w.frame.size(), QSize(480, 320));
         w.setEditing(true);
         w.selection({"nightfall-cpu-chip"});

@@ -312,7 +312,7 @@ private slots:
     void dashboardLayoutAndBundledIcons() {
         const auto theme = Theme::load(assets() + "/themes/nightfall.json");
         QCOMPARE(theme.size(), QSize(480, 320));
-        QCOMPARE(theme.orientation(), 2);
+        QCOMPARE(theme.orientation(), 3);
         QSet<QString> groups, registered;
         for (const auto &metric : metrics())
             registered.insert(metric.first);
