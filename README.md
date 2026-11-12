@@ -105,7 +105,7 @@ Windows 分发可使用 CI 生成的安装包，也可用 `scripts/package-windo
 GitHub Actions 的 [Build, test and package](.github/workflows/ci.yml) 在 push、pull request 和手动触发时，使用 Qt 6.8.3 分别在 Ubuntu 24.04 / GCC 与 Windows Server 2022 / MSVC 上执行 Release 构建、core / GUI / startup 测试和 Nightfall 示例渲染。非 pull request 运行（push 与手动触发）还会构建发布包，在对应 workflow run 的 Artifacts 中保留 30 天：
 
 - Linux：`turing-screen-qt-<版本>-linux-x64.tar.gz`，包含 Qt 6.8.3 运行库、插件、资源与 `run.sh`；打包后会先运行包内程序完成版本与主题渲染冒烟测试。
-- Windows：`turing-screen-qt-<版本>-windows-x64-installer.exe`，由 `windeployqt` 部署 Qt DLL、平台 / 样式 / TLS 插件与 MSVC 运行库，再由 NSIS 生成按用户安装的安装包。安装包未做代码签名，Windows SmartScreen 可能显示提示。
+- Windows：`turing-screen-qt-<版本>-windows-x64-installer.exe`，使用 `windeployqt` 部署 Qt DLL 与平台 / 样式 / TLS 插件，补齐 MSVC 运行库，再由 NSIS 生成按用户安装的安装包。安装包未做代码签名，Windows SmartScreen 可能显示提示。
 
 测试报告、日志和预览图作为 artifacts 保留 7 天；不包含 Nix 检查。
 

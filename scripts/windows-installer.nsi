@@ -27,6 +27,11 @@ SetCompressor /SOLID lzma
 !ifndef SOURCE_DIR
   !error "SOURCE_DIR is required; pass /DSOURCE_DIR=<staged application directory>"
 !endif
+; The default mask uses Windows path separators. SOURCE_GLOB can be overridden,
+; for example when validating the script with makensis on Linux.
+!ifndef SOURCE_GLOB
+  !define SOURCE_GLOB "${SOURCE_DIR}\*.*"
+!endif
 !ifndef OUTPUT_FILE
   !define OUTPUT_FILE "turing-screen-qt-${APP_VERSION}-windows-x64-installer.exe"
 !endif
@@ -77,7 +82,7 @@ Section "Turing Screen" SEC_APP
   SectionIn RO
   SetShellVarContext current
   SetOutPath "$INSTDIR"
-  File /r "${SOURCE_DIR}/*.*"
+  File /r "${SOURCE_GLOB}"
   WriteUninstaller "$INSTDIR\Uninstall.exe"
 
   CreateDirectory "$SMPROGRAMS\Turing Screen"
