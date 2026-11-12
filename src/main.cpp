@@ -35,7 +35,7 @@ int main(int argc, char **argv) {
     parser.addHelpOption();
     parser.addOption({{"v", "version"}, "Show version"});
     parser.addOptions({{"data-dir", "Data directory", "directory"},
-                       {"autostart", "Start in lightweight mode with a tray icon"},
+                       {"autostart", "Connect the saved serial port, send frames and start in lightweight mode"},
                        {"theme", "Theme to open", "file"},
                        {"render-theme", "Render a theme without showing a window", "file"},
                        {"check-theme", "Validate a theme", "file"},

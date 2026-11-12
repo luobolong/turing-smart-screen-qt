@@ -262,6 +262,36 @@ private slots:
         QTRY_VERIFY(app.isLightweight());
         QVERIFY(!app.window());
     }
+    void autostartConnectsSavedPortAndSendsInLightweight() {
+#ifndef Q_OS_WIN
+        TestProfile dir;
+        PseudoScreen screen;
+        const auto themePath = assets() + "/themes/nightfall.json";
+        {
+            QFile config(dir.path() + "/config.json");
+            QVERIFY(config.open(QIODevice::WriteOnly));
+            config.write(QJsonDocument(QJsonObject{
+                {"weather_enabled", false}, {"selected_theme", themePath},
+                {"port", screen.port}, {"interval_ms", 1000}}).toJson());
+        }
+        ApplicationController app(dir.path(), {}, [] { return true; }, true);
+        QVERIFY(app.isLightweight());
+        QVERIFY(!app.window());
+        auto &runtime = app.display();
+        QVERIFY(runtime.sending);
+        QCOMPARE(runtime.path, themePath);
+        QTRY_VERIFY_WITH_TIMEOUT(runtime.device.status().connected, 3000);
+        QTRY_VERIFY_WITH_TIMEOUT(runtime.device.status().frames > 0, 3000);
+        QVERIFY(runtime.renderedFrames > 0);
+        QVERIFY(!runtime.frame.isNull());
+        QVERIFY(app.sendAction->isChecked());
+        QVERIFY(app.sendAction->isEnabled());
+        QVERIFY(!app.window()); // Connecting and sending never create the editor.
+        QTRY_VERIFY(!screen.bytes().isEmpty());
+#else
+        QSKIP("Automatic serial connection uses a POSIX PTY");
+#endif
+    }
     void autostartWithoutTrayKeepsWindowAvailable() {
         TestProfile dir;
         ApplicationController app(dir.path(), {}, [] { return false; }, true);

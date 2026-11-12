@@ -996,8 +996,8 @@ void MainWindow::updateStartupUi() {
         startupStatus->setText(L("启动设置：", "Startup: ") + state.error);
     else
         startupStatus->setText(state.enabled
-            ? L("已启用，下次登录后直接进入轻量模式，点击托盘图标打开窗口。",
-                "Enabled. Starts in lightweight mode at your next sign-in. Click the tray icon to open the window.")
+            ? L("已启用，下次登录后自动连接副屏、开始发送并进入轻量模式，点击托盘图标打开窗口。",
+                "Enabled. Automatically connects to the display, starts sending and enters lightweight mode at your next sign-in. Click the tray icon to open the window.")
             : L("已关闭，不影响当前运行和副屏发送。", "Disabled. The current session and display updates continue."));
 }
 void MainWindow::configureWeather() {

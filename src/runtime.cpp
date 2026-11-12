@@ -41,6 +41,11 @@ DisplayRuntime::DisplayRuntime(QString directory, const QString &initialTheme)
         direction.toDouble() == direction.toInt()) theme.data["orientation"] = direction.toInt();
     configureWeather();
     connect(&sampling, &QTimer::timeout, this, &DisplayRuntime::tick);
+    connect(&device, &Device::statusChanged, this, [this] {
+        // Lightweight autostart starts sending before the asynchronous serial
+        // connection completes, so wait for the first usable frame immediately.
+        if (sending && device.status().connected) tick();
+    }, Qt::QueuedConnection);
     sampling.setTimerType(Qt::CoarseTimer);
     sampling.start(qBound(1000, config.value("interval_ms").toInt(1000), 10000));
     sample = collector.collect(config["disk"].toString());
@@ -61,6 +66,23 @@ void DisplayRuntime::setLightweight(bool value) {
         sample = {};
         renderer.clearCaches();
     }
+}
+void DisplayRuntime::startSending() {
+    if (sending) return;
+    auto port = config["port"].toString();
+    if (port.isEmpty()) {
+        // Without a saved choice, only connect when there is no ambiguity.
+        const auto ports = Device::ports();
+        if (ports.size() == 1) port = ports.first().name;
+    }
+    if (port.isEmpty()) return;
+    sending = true;
+    const auto status = device.status();
+    if (!status.connected && !status.connecting)
+        device.connectPort(port, theme.orientation(), config["brightness"].toInt(75),
+                           config["mirror"].toBool());
+    if (lightweight) setLightweight(true);
+    if (status.connected) tick();
 }
 void DisplayRuntime::tick() {
     // A paused/disconnected background session has no consumer for samples.

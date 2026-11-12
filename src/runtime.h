@@ -23,6 +23,7 @@ public:
     quint64 renderedFrames = 0;
     void configureWeather();
     void setLightweight(bool value);
+    void startSending();
     void tick();
     void render();
     void toggleSending();

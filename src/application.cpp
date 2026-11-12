@@ -5,7 +5,7 @@
 #endif
 namespace Screen {
 ApplicationController::ApplicationController(QString directory, const QString &theme,
-                                             std::function<bool()> available, bool startLightweight)
+                                             std::function<bool()> available, bool autostart)
     : runtime(std::make_shared<DisplayRuntime>(std::move(directory), theme)),
       tray(new QSystemTrayIcon(this)), trayAvailable(std::move(available)) {
     qApp->setQuitOnLastWindowClosed(false);
@@ -24,11 +24,14 @@ ApplicationController::ApplicationController(QString directory, const QString &t
     });
     connect(runtime.get(), &DisplayRuntime::updated, this, &ApplicationController::updateTrayState);
     connect(&runtime->device, &Device::statusChanged, this, &ApplicationController::updateTrayState, Qt::QueuedConnection);
-    if (startLightweight && trayAvailable())
+    if (autostart && trayAvailable())
         runtime->setLightweight(true);
     else
         makeWindow();
     makeTray();
+    // Autostart owns the display process as well as the tray: connect the
+    // last-used port and resume sending without requiring the editor window.
+    if (autostart) runtime->startSending();
 }
 ApplicationController::~ApplicationController() {
     editor.reset();

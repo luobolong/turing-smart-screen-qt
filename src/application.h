@@ -11,7 +11,7 @@ class ApplicationController : public QObject {
 public:
     ApplicationController(QString directory, const QString &theme = {},
                           std::function<bool()> trayAvailable = QSystemTrayIcon::isSystemTrayAvailable,
-                          bool startLightweight = false);
+                          bool autostart = false);
     ~ApplicationController() override;
     MainWindow *window() const { return editor.get(); }
     DisplayRuntime &display() const { return *runtime; }
