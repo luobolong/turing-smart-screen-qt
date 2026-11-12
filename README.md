@@ -190,7 +190,7 @@ journalctl --user -u turing-screen.service -b
 
 `scripts/verify-windows.ps1`、`scripts/verify-linux.sh` 启动原生窗口，采样 RSS 峰值和 CPU 时间，保存十二种界面截图（包含窄窗口、功能栏展开及自动轻量模式设置）。加 `-Stress`（Linux 第三个参数 `--stress-test`）测试主题切换、图层创建、撤销、页面切换、托盘和退出。MB 为 1,000,000 字节，包含共享库常驻页；CPU 报告包含单核比例及按逻辑核数归一化的整机比例。资源采样计时器只在测试模式启用。
 
-当前本机 Wayland / DPR 2 对照：完整界面约 133 MB RSS，轻量模式持续向模拟副屏推送时约 66 MB，开启天气约 79 MB；Nightfall 渲染耗时减少约 30%，复杂图片主题约 52%。条件、限制与原始数据见 [性能优化和轻量模式验证](docs/performance-optimization-2026-10-25.md)。100 MB 是随附主题和基本工作流的实测目标，并非任意巨大图片、显示缩放或系统字体后端的硬性上限；当前完整高 DPI 窗口超过该目标。实体副屏发送仍需实机验证。
+当前本机 Wayland / DPR 2 对照：完整界面约 133 MB RSS，轻量模式持续向模拟副屏推送时约 66 MB，开启天气约 79 MB；Nightfall 渲染耗时减少约 30%，复杂图片主题约 52%。100 MB 是随附主题和基本工作流的实测目标，并非任意巨大图片、显示缩放或系统字体后端的硬性上限；当前完整高 DPI 窗口超过该目标。实体副屏发送仍需实机验证。
 
 可用 `-DSCREEN_BUILD_PROFILING=ON` 构建独立 `screen-profile`，再运行 `python3 scripts/profile-linux.py --case nightfall,lightweight --seconds 20 --output artifacts/performance-local`。脚本默认查找 `build/profile/screen-profile`，可用 `--binary` 指定其他构建目录。探针使用独立配置，默认不连接副屏；该构建选项默认关闭，探针不随应用安装。
 
