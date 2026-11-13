@@ -20,7 +20,7 @@ struct Port {
 };
 struct DeviceStatus {
     bool connected = false, connecting = false;
-    QString message;
+    QString message, port;
     quint64 frames = 0, bytes = 0;
 };
 class Device : public QThread {

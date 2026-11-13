@@ -27,7 +27,13 @@ int main(int argc, char **argv) {
     QCoreApplication::setApplicationName("TuringScreenQt");
     QGuiApplication::setApplicationDisplayName("Turing Screen");
     QCoreApplication::setApplicationVersion(SCREEN_VERSION);
-    // Keep the platform's style, palette and font, including Qt style plugins.
+    // Offscreen platforms have no system font database; choose the bundled UI
+    // font before loading symbol fonts so numeric controls never inherit icons.
+    if (!cli && QGuiApplication::platformName() == "offscreen") {
+        auto font = QApplication::font();
+        font.setFamily(Screen::screenFontFamily());
+        QApplication::setFont(font);
+    }
     Screen::resourceTrace("QApplication");
     QImageReader::setAllocationLimit(16);
     QCommandLineParser parser;

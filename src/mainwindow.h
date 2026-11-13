@@ -5,6 +5,7 @@
 #include "sensors.h"
 #include "runtime.h"
 #include "startup.h"
+#include "panesplitter.h"
 #include <memory>
 #include <QElapsedTimer>
 #include <QJsonObject>
@@ -47,7 +48,6 @@ public:
     Theme &theme;
     Snapshot &sample;
     void runSmoke(const QString &dir, bool stress = false, int seconds = 60);
-    QJsonObject diagnostics() const;
 signals:
     void lightweightRequested();
     void preferencesChanged();
@@ -72,14 +72,15 @@ private:
         QJsonObject saved;
         QList<QJsonObject> undo, redo;
     };
-    QString dataDir;
+    QString dataDir, libraryFolder, fileClipboard, libraryQuery;
+    bool fileCut = false;
     QJsonObject &config;
     QJsonObject saved;
     QString &path;
     bool english = false, editing = false, building = false, quitting = false, dirty = false;
     bool &sending;
     std::function<bool()> trayAvailable = QSystemTrayIcon::isSystemTrayAvailable;
-    enum Page { LibraryPage, EditorPage, SensorsPage, SettingsPage, DiagnosticsPage, PageCount };
+    enum Page { LibraryPage, EditorPage, SensorsPage, SettingsPage, PageCount };
     int page = LibraryPage;
     bool sidebarExpanded = false;
     QVector<Entry> entries;
@@ -93,23 +94,25 @@ private:
     QImage &frame;
     QTimer &sampling;
     QTimer renderTimer;
-    QWidget *root = nullptr, *titleBar = nullptr, *sidebar = nullptr, *devicePanel = nullptr,
+    QWidget *root = nullptr, *titleBar = nullptr, *sidebar = nullptr, *devicePanel = nullptr, *libraryBrowser = nullptr,
             *left = nullptr, *right = nullptr;
     QStackedWidget *pages = nullptr;
-    QSplitter *librarySplit = nullptr, *editorSplit = nullptr;
+    PaneSplitter *librarySplit = nullptr, *editorSplit = nullptr;
     QTabWidget *inspectorTabs = nullptr;
-    QToolButton *sidebarToggle = nullptr;
-    QListWidget *library = nullptr;
-    QTreeWidget *tree = nullptr;
+    QToolButton *sidebarToggle = nullptr, *sidebarBrand = nullptr;
+    QTreeWidget *library = nullptr;
+    QList<QTreeWidgetItem *> libraryItems;
+    QTreeWidget *tree = nullptr, *folderTree = nullptr;
     QLineEdit *search = nullptr;
+    QWidget *librarySearchPanel = nullptr;
     Canvas *canvas = nullptr;
     Canvas *previewCanvas = nullptr;
     QListWidget *navigation = nullptr;
-    QLabel *pageTitle = nullptr, *libraryEmpty = nullptr;
+    QLabel *pageTitle = nullptr, *libraryEmpty = nullptr, *editorThemeTitle = nullptr;
     QLabel *title = nullptr, *resolution = nullptr, *connection = nullptr, *status = nullptr,
            *sendState = nullptr, *dataState = nullptr;
     QPushButton *modeButton = nullptr, *connectButton = nullptr, *sendButton = nullptr,
-                *deleteThemeButton = nullptr, *saveButton = nullptr;
+                *saveButton = nullptr;
     QAction *deleteThemeAction = nullptr, *undoAction = nullptr, *redoAction = nullptr;
     QComboBox *portBox = nullptr, *directionBox = nullptr, *bindingBox = nullptr;
     QSlider *brightness = nullptr;
@@ -120,8 +123,10 @@ private:
     QCheckBox *startupToggle = nullptr;
     QLabel *startupStatus = nullptr;
     QPushButton *fontColor = nullptr, *fillColor = nullptr;
+    QComboBox *uiThemeBox = nullptr;
+    QLabel *uiThemeStatus = nullptr;
+    QString uiThemeError;
     QTableWidget *sensorTable = nullptr;
-    QPlainTextEdit *diagnosticText = nullptr;
     QJsonArray resourceSamples;
     QElapsedTimer resourceClock;
     QString workloadStage = "idle";
@@ -134,11 +139,31 @@ private:
     void setSidebarExpanded(bool expanded);
     void updateResponsiveLayout();
     void buildSensors(QWidget *page);
+    void updateSensorColumns();
     void buildSettings(QWidget *page);
+    QCheckBox *collectionToggle(const QString &name);
+    QWidget *zoomControls(Canvas *target, const QString &prefix);
+    void reloadUiThemes();
+    void selectUiTheme(const QString &id);
+    void createUiTheme();
     void updateStartupUi();
     void configureWeather();
-    void buildDiagnostics(QWidget *page);
+    void updateWeatherStatus();
     void buildLibrary();
+    void buildFolderTree();
+    void selectLibraryFolder(const QString &folder);
+    void filterLibrary();
+    void searchLibrary();
+    void selectOpenedTheme();
+    void expandSelectedThemeFolder();
+    QString targetLibraryFolder() const;
+    void libraryMenu(const QString &file, QPoint global);
+    void newLibraryFolder(const QString &parent = {});
+    void renameLibraryItem(const QString &file);
+    bool renameLibraryPath(const QString &file, const QString &name, QString &error);
+    void transferLibraryItem(const QString &file, const QString &directory, bool copy);
+    void restoreLibraryItem(const QString &file);
+    void rebindLibraryPaths(const QString &from, const QString &to);
     void reloadLibrary();
     void updateThemeActions();
     QString libraryKey(const QString &file) const;
@@ -146,8 +171,8 @@ private:
     bool managedTheme(const QString &file) const;
     bool builtinTheme(const QString &file) const;
     void includeTheme(const QString &file);
-    void deleteTheme(const QString &file);
-    bool removeTheme(const QString &file, QString &error);
+    void deleteTheme(const QString &file, bool permanent = false);
+    bool removeTheme(const QString &file, QString &error, bool permanent = false);
     void restoreBuiltinThemes();
     void buildTree();
     void selectTree();
@@ -168,8 +193,8 @@ private:
     void contextMenu(QPoint global);
     void reparent(const QStringList &ids, const QString &parent, int index = -1);
     void rename();
-    void mutate(const std::function<void(Theme &)> &fn);
-    void remember(QJsonObject before);
+    void mutate(const std::function<void(Theme &)> &fn, bool rebuildLayers = true);
+    void remember(QJsonObject before, bool rebuildLayers = true);
     void undo();
     void redo();
     void render();

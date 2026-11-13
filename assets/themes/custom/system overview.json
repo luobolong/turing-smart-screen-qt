@@ -1,0 +1,721 @@
+{
+  "format": "turing-screen-qt",
+  "version": 1,
+  "name": "System overview",
+  "landscape": true,
+  "layers": [
+    {
+      "id": "system-overview-cpu",
+      "kind": "group",
+      "name": "CPU",
+      "x": 16,
+      "y": 24,
+      "w": 0,
+      "h": 0,
+      "visible": true,
+      "locked": false,
+      "metric": "",
+      "fill": [
+        40,
+        201,
+        191,
+        255
+      ],
+      "stroke": [
+        102,
+        217,
+        223,
+        255
+      ],
+      "stroke_width": 1,
+      "children": [
+        {
+          "id": "system-overview-cpu-panel",
+          "kind": "rectangle",
+          "name": "Panel",
+          "x": 0,
+          "y": 0,
+          "w": 208,
+          "h": 128,
+          "visible": true,
+          "locked": false,
+          "metric": "",
+          "fill": [
+            0,
+            0,
+            0,
+            0
+          ],
+          "stroke": [
+            102,
+            217,
+            223,
+            255
+          ],
+          "stroke_width": 1
+        },
+        {
+          "id": "system-overview-cpu-title",
+          "kind": "text",
+          "name": "CPU",
+          "x": 12,
+          "y": 8,
+          "w": 120,
+          "h": 30,
+          "visible": true,
+          "locked": false,
+          "metric": "",
+          "fill": [
+            40,
+            201,
+            191,
+            255
+          ],
+          "stroke": [
+            102,
+            217,
+            223,
+            255
+          ],
+          "stroke_width": 1,
+          "text": "CPU",
+          "font": {
+            "family": "Noto Sans SC",
+            "size": 18,
+            "color": [
+              255,
+              255,
+              255,
+              255
+            ],
+            "spacing": 0
+          },
+          "long_text": true,
+          "length": 0
+        },
+        {
+          "id": "system-overview-cpu-value",
+          "kind": "sensor",
+          "name": "CpuLoad",
+          "x": 12,
+          "y": 40,
+          "w": 120,
+          "h": 30,
+          "visible": true,
+          "locked": false,
+          "metric": "CpuLoad",
+          "fill": [
+            40,
+            201,
+            191,
+            255
+          ],
+          "stroke": [
+            102,
+            217,
+            223,
+            255
+          ],
+          "stroke_width": 1,
+          "text": "",
+          "font": {
+            "family": "Noto Sans SC",
+            "size": 26,
+            "color": [
+              255,
+              255,
+              255,
+              255
+            ],
+            "spacing": 0
+          },
+          "long_text": true,
+          "length": 0
+        },
+        {
+          "id": "system-overview-cpu-progress",
+          "kind": "bar",
+          "name": "Progress",
+          "x": 12,
+          "y": 104,
+          "w": 184,
+          "h": 10,
+          "visible": true,
+          "locked": false,
+          "metric": "CpuLoad",
+          "fill": [
+            40,
+            201,
+            191,
+            255
+          ],
+          "stroke": [
+            102,
+            217,
+            223,
+            255
+          ],
+          "stroke_width": 1,
+          "step": 1,
+          "front": [
+            40,
+            201,
+            191,
+            255
+          ],
+          "back": [
+            37,
+            48,
+            65,
+            255
+          ]
+        }
+      ]
+    },
+    {
+      "id": "system-overview-ram",
+      "kind": "group",
+      "name": "RAM",
+      "x": 252,
+      "y": 24,
+      "w": 0,
+      "h": 0,
+      "visible": true,
+      "locked": false,
+      "metric": "",
+      "fill": [
+        40,
+        201,
+        191,
+        255
+      ],
+      "stroke": [
+        102,
+        217,
+        223,
+        255
+      ],
+      "stroke_width": 1,
+      "children": [
+        {
+          "id": "system-overview-ram-panel",
+          "kind": "rectangle",
+          "name": "Panel",
+          "x": 0,
+          "y": 0,
+          "w": 208,
+          "h": 128,
+          "visible": true,
+          "locked": false,
+          "metric": "",
+          "fill": [
+            0,
+            0,
+            0,
+            0
+          ],
+          "stroke": [
+            102,
+            217,
+            223,
+            255
+          ],
+          "stroke_width": 1
+        },
+        {
+          "id": "system-overview-ram-title",
+          "kind": "text",
+          "name": "RAM",
+          "x": 12,
+          "y": 8,
+          "w": 120,
+          "h": 30,
+          "visible": true,
+          "locked": false,
+          "metric": "",
+          "fill": [
+            40,
+            201,
+            191,
+            255
+          ],
+          "stroke": [
+            102,
+            217,
+            223,
+            255
+          ],
+          "stroke_width": 1,
+          "text": "RAM",
+          "font": {
+            "family": "Noto Sans SC",
+            "size": 18,
+            "color": [
+              255,
+              255,
+              255,
+              255
+            ],
+            "spacing": 0
+          },
+          "long_text": true,
+          "length": 0
+        },
+        {
+          "id": "system-overview-ram-value",
+          "kind": "sensor",
+          "name": "RamLoad",
+          "x": 12,
+          "y": 40,
+          "w": 120,
+          "h": 30,
+          "visible": true,
+          "locked": false,
+          "metric": "RamLoad",
+          "fill": [
+            40,
+            201,
+            191,
+            255
+          ],
+          "stroke": [
+            102,
+            217,
+            223,
+            255
+          ],
+          "stroke_width": 1,
+          "text": "",
+          "font": {
+            "family": "Noto Sans SC",
+            "size": 26,
+            "color": [
+              255,
+              255,
+              255,
+              255
+            ],
+            "spacing": 0
+          },
+          "long_text": true,
+          "length": 0
+        },
+        {
+          "id": "system-overview-ram-usage",
+          "kind": "sensor",
+          "name": "Used / total GB",
+          "x": 12,
+          "y": 78,
+          "w": 120,
+          "h": 30,
+          "visible": true,
+          "locked": false,
+          "metric": "RamUsage",
+          "fill": [
+            40,
+            201,
+            191,
+            255
+          ],
+          "stroke": [
+            102,
+            217,
+            223,
+            255
+          ],
+          "stroke_width": 1,
+          "text": "",
+          "font": {
+            "family": "Noto Sans SC",
+            "size": 16,
+            "color": [
+              255,
+              255,
+              255,
+              255
+            ],
+            "spacing": 0
+          },
+          "long_text": true,
+          "length": 0
+        },
+        {
+          "id": "system-overview-ram-progress",
+          "kind": "bar",
+          "name": "Progress",
+          "x": 12,
+          "y": 104,
+          "w": 184,
+          "h": 10,
+          "visible": true,
+          "locked": false,
+          "metric": "RamLoad",
+          "fill": [
+            40,
+            201,
+            191,
+            255
+          ],
+          "stroke": [
+            102,
+            217,
+            223,
+            255
+          ],
+          "stroke_width": 1,
+          "step": 1,
+          "front": [
+            40,
+            201,
+            191,
+            255
+          ],
+          "back": [
+            37,
+            48,
+            65,
+            255
+          ]
+        }
+      ]
+    },
+    {
+      "id": "system-overview-net",
+      "kind": "group",
+      "name": "NET",
+      "x": 16,
+      "y": 168,
+      "w": 0,
+      "h": 0,
+      "visible": true,
+      "locked": false,
+      "metric": "",
+      "fill": [
+        40,
+        201,
+        191,
+        255
+      ],
+      "stroke": [
+        102,
+        217,
+        223,
+        255
+      ],
+      "stroke_width": 1,
+      "children": [
+        {
+          "id": "system-overview-net-panel",
+          "kind": "rectangle",
+          "name": "Panel",
+          "x": 0,
+          "y": 0,
+          "w": 208,
+          "h": 128,
+          "visible": true,
+          "locked": false,
+          "metric": "",
+          "fill": [
+            0,
+            0,
+            0,
+            0
+          ],
+          "stroke": [
+            102,
+            217,
+            223,
+            255
+          ],
+          "stroke_width": 1
+        },
+        {
+          "id": "system-overview-net-title",
+          "kind": "text",
+          "name": "NET",
+          "x": 12,
+          "y": 8,
+          "w": 120,
+          "h": 30,
+          "visible": true,
+          "locked": false,
+          "metric": "",
+          "fill": [
+            40,
+            201,
+            191,
+            255
+          ],
+          "stroke": [
+            102,
+            217,
+            223,
+            255
+          ],
+          "stroke_width": 1,
+          "text": "NET",
+          "font": {
+            "family": "Noto Sans SC",
+            "size": 18,
+            "color": [
+              255,
+              255,
+              255,
+              255
+            ],
+            "spacing": 0
+          },
+          "long_text": true,
+          "length": 0
+        },
+        {
+          "id": "system-overview-net-value",
+          "kind": "sensor",
+          "name": "InternetDown",
+          "x": 12,
+          "y": 40,
+          "w": 120,
+          "h": 30,
+          "visible": true,
+          "locked": false,
+          "metric": "InternetDown",
+          "fill": [
+            40,
+            201,
+            191,
+            255
+          ],
+          "stroke": [
+            102,
+            217,
+            223,
+            255
+          ],
+          "stroke_width": 1,
+          "text": "",
+          "font": {
+            "family": "Noto Sans SC",
+            "size": 26,
+            "color": [
+              255,
+              255,
+              255,
+              255
+            ],
+            "spacing": 0
+          },
+          "long_text": true,
+          "length": 0
+        },
+        {
+          "id": "system-overview-net-upload",
+          "kind": "sensor",
+          "name": "Upload",
+          "x": 12,
+          "y": 84,
+          "w": 120,
+          "h": 30,
+          "visible": true,
+          "locked": false,
+          "metric": "InternetUp",
+          "fill": [
+            40,
+            201,
+            191,
+            255
+          ],
+          "stroke": [
+            102,
+            217,
+            223,
+            255
+          ],
+          "stroke_width": 1,
+          "text": "",
+          "font": {
+            "family": "Noto Sans SC",
+            "size": 16,
+            "color": [
+              255,
+              255,
+              255,
+              255
+            ],
+            "spacing": 0
+          },
+          "long_text": true,
+          "length": 0
+        }
+      ]
+    },
+    {
+      "id": "system-overview-clock",
+      "kind": "group",
+      "name": "CLOCK",
+      "x": 252,
+      "y": 168,
+      "w": 0,
+      "h": 0,
+      "visible": true,
+      "locked": false,
+      "metric": "",
+      "fill": [
+        40,
+        201,
+        191,
+        255
+      ],
+      "stroke": [
+        102,
+        217,
+        223,
+        255
+      ],
+      "stroke_width": 1,
+      "children": [
+        {
+          "id": "system-overview-clock-panel",
+          "kind": "rectangle",
+          "name": "Panel",
+          "x": 0,
+          "y": 0,
+          "w": 208,
+          "h": 128,
+          "visible": true,
+          "locked": false,
+          "metric": "",
+          "fill": [
+            0,
+            0,
+            0,
+            0
+          ],
+          "stroke": [
+            102,
+            217,
+            223,
+            255
+          ],
+          "stroke_width": 1
+        },
+        {
+          "id": "system-overview-clock-title",
+          "kind": "text",
+          "name": "CLOCK",
+          "x": 12,
+          "y": 8,
+          "w": 120,
+          "h": 30,
+          "visible": true,
+          "locked": false,
+          "metric": "",
+          "fill": [
+            40,
+            201,
+            191,
+            255
+          ],
+          "stroke": [
+            102,
+            217,
+            223,
+            255
+          ],
+          "stroke_width": 1,
+          "text": "CLOCK",
+          "font": {
+            "family": "Noto Sans SC",
+            "size": 18,
+            "color": [
+              255,
+              255,
+              255,
+              255
+            ],
+            "spacing": 0
+          },
+          "long_text": true,
+          "length": 0
+        },
+        {
+          "id": "system-overview-clock-value",
+          "kind": "sensor",
+          "name": "Time",
+          "x": 12,
+          "y": 40,
+          "w": 120,
+          "h": 30,
+          "visible": true,
+          "locked": false,
+          "metric": "Time",
+          "fill": [
+            40,
+            201,
+            191,
+            255
+          ],
+          "stroke": [
+            102,
+            217,
+            223,
+            255
+          ],
+          "stroke_width": 1,
+          "text": "",
+          "font": {
+            "family": "Noto Sans SC",
+            "size": 26,
+            "color": [
+              255,
+              255,
+              255,
+              255
+            ],
+            "spacing": 0
+          },
+          "long_text": true,
+          "length": 0
+        },
+        {
+          "id": "system-overview-clock-date",
+          "kind": "sensor",
+          "name": "Date",
+          "x": 12,
+          "y": 84,
+          "w": 120,
+          "h": 30,
+          "visible": true,
+          "locked": false,
+          "metric": "Date",
+          "fill": [
+            40,
+            201,
+            191,
+            255
+          ],
+          "stroke": [
+            102,
+            217,
+            223,
+            255
+          ],
+          "stroke_width": 1,
+          "text": "",
+          "font": {
+            "family": "Noto Sans SC",
+            "size": 16,
+            "color": [
+              255,
+              255,
+              255,
+              255
+            ],
+            "spacing": 0
+          },
+          "long_text": true,
+          "length": 0
+        }
+      ]
+    }
+  ]
+}

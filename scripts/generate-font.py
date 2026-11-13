@@ -14,7 +14,7 @@ for lead in range(0xA1, 0xF8):
 for file in (root / "src").glob("*"):
     if file.is_file():
         chars.update(file.read_text(encoding="utf-8"))
-for file in (root / "assets/official").rglob("*"):
+for file in (root / "assets/themes/official").rglob("*"):
     chars.update(file.stem)
 chars.update("●＋−×…→←↑↓✓□℃°")
 font = TTFont(root / "assets/fonts/NotoSansSC.ttf")

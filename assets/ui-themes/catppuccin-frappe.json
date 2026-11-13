@@ -1,0 +1,26 @@
+{
+  "format": "turing-ui-palette",
+  "version": 1,
+  "name": "Catppuccin Frapp\u00e9",
+  "mode": "dark",
+  "order": 11,
+  "source": "https://github.com/catppuccin/palette",
+  "colors": {
+    "window": "#303446",
+    "base": "#292c3c",
+    "button": "#414559",
+    "alternate_base": "#414559",
+    "text": "#c6d0f5",
+    "muted": "#a5adce",
+    "border": "#626880",
+    "accent": "#ca9ee6",
+    "accent_text": "#303446",
+    "link": "#8caaee",
+    "tooltip": "#232634",
+    "tooltip_text": "#c6d0f5",
+    "disabled_text": "#838ba7",
+    "success": "#a6d189",
+    "warning": "#e5c890",
+    "error": "#e78284"
+  }
+}

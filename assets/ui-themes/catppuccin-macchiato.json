@@ -1,0 +1,26 @@
+{
+  "format": "turing-ui-palette",
+  "version": 1,
+  "name": "Catppuccin Macchiato",
+  "mode": "dark",
+  "order": 12,
+  "source": "https://github.com/catppuccin/palette",
+  "colors": {
+    "window": "#24273a",
+    "base": "#1e2030",
+    "button": "#363a4f",
+    "alternate_base": "#363a4f",
+    "text": "#cad3f5",
+    "muted": "#a5adcb",
+    "border": "#5b6078",
+    "accent": "#c6a0f6",
+    "accent_text": "#24273a",
+    "link": "#8aadf4",
+    "tooltip": "#181926",
+    "tooltip_text": "#cad3f5",
+    "disabled_text": "#8087a2",
+    "success": "#a6da95",
+    "warning": "#eed49f",
+    "error": "#ed8796"
+  }
+}

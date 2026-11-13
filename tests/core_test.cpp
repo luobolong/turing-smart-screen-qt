@@ -6,6 +6,8 @@
 #include "weather.h"
 #include "systeminfo.h"
 #include "memoryinfo.h"
+#include "themelibrary.h"
+#include "weathernetwork.h"
 #include <QtEndian>
 #include <QDirIterator>
 #include <QJsonDocument>
@@ -23,50 +25,6 @@
 #include <unistd.h>
 #endif
 using namespace Screen;
-class WeatherReply : public QNetworkReply {
-    QByteArray body;
-    qint64 offset = 0;
-public:
-    WeatherReply(const QNetworkRequest &request, QByteArray body, QObject *parent)
-        : QNetworkReply(parent), body(std::move(body)) {
-        setRequest(request);
-        setUrl(request.url());
-        open(QIODevice::ReadOnly | QIODevice::Unbuffered);
-        QTimer::singleShot(0, this, [this] {
-            if (isFinished())
-                return;
-            setFinished(true);
-            emit readyRead();
-            emit finished();
-        });
-    }
-    void abort() override {
-        if (!isFinished()) {
-            setError(OperationCanceledError, "cancelled");
-            setFinished(true);
-            emit finished();
-        }
-    }
-    qint64 bytesAvailable() const override { return body.size() - offset + QNetworkReply::bytesAvailable(); }
-    qint64 readData(char *data, qint64 maximum) override {
-        const auto count = qMin(maximum, body.size() - offset);
-        if (count <= 0)
-            return -1;
-        memcpy(data, body.constData() + offset, size_t(count));
-        offset += count;
-        return count;
-    }
-};
-class WeatherNetwork : public QNetworkAccessManager {
-public:
-    QList<QByteArray> responses;
-    QList<QUrl> requests;
-protected:
-    QNetworkReply *createRequest(Operation, const QNetworkRequest &request, QIODevice *) override {
-        requests.append(request.url());
-        return new WeatherReply(request, responses.isEmpty() ? QByteArray("{}") : responses.takeFirst(), this);
-    }
-};
 #ifdef Q_OS_LINUX
 static bool writeSensorFile(const QString &path, const QByteArray &value) {
     if (!QDir().mkpath(QFileInfo(path).absolutePath()))
@@ -79,6 +37,156 @@ static bool writeSensorFile(const QString &path, const QByteArray &value) {
 class CoreTest : public QObject {
     Q_OBJECT
 private slots:
+    void incrementalRenderingMatchesFullFramesAcrossThemes() {
+        QFile input(QString::fromUtf8(SCREEN_FIXTURE_DIR) + "/nightfall-sample.json");
+        QVERIFY(input.open(QIODevice::ReadOnly));
+        const auto fixture = Snapshot::fromJson(QJsonDocument::fromJson(input.readAll()).object());
+        QDirIterator files(assets() + "/themes", {"*.data", "*.json"}, QDir::Files, QDirIterator::Subdirectories);
+        Renderer incremental, reference;
+        int count = 0;
+        while (files.hasNext()) {
+            const auto file = files.next();
+            if (file.contains("/deleted/") || file.endsWith("AppConfig.data")) continue;
+            const auto theme = Theme::load(file);
+            auto sample = fixture;
+            for (int step = 0; step < 4; ++step) {
+                if (step == 3) sample = {};
+                else {
+                    for (auto it = sample.values.begin(); it != sample.values.end(); ++it)
+                        it.value() = step == 0 ? it.value() : step == 1 ? 99 : 1;
+                    sample.strings["Time"] = step == 0 ? "12:59" : step == 1 ? "23:58" : "1";
+                    sample.strings["WeatherCondition"] = step == 1 ? "Partly cloudy" : "Clear";
+                }
+                const auto actual = incremental.render(theme, sample);
+                const auto expected = reference.renderFull(theme, sample);
+                QVERIFY2(actual == expected, qPrintable(file + " step=" + QString::number(step)));
+                const auto key = actual.cacheKey();
+                QCOMPARE(incremental.render(theme, sample).cacheKey(), key);
+                QVERIFY(incremental.lastDirtyRect().isEmpty());
+                QVERIFY(incremental.staticCachedBytes() <= 2 * actual.sizeInBytes());
+            }
+            ++count;
+        }
+        QVERIFY(count >= 30);
+        incremental.clearCaches();
+        QCOMPARE(incremental.staticCachedBytes(), 0);
+        QCOMPARE(incremental.cachedBytes(), 0);
+        incremental.setStaticCaching(false);
+        for (int i = 0; i < 3; ++i) {
+            incremental.render(Theme::starter(), fixture);
+            QCOMPARE(incremental.staticCachedBytes(), 0);
+        }
+    }
+    void incrementalDamagePreservesOverlapsAndThemeEdits() {
+        auto label = newLayer("text", "Foreground");
+        label["text"] = "Fixed label";
+        label["x"] = 40; label["y"] = 40;
+        auto sensor = newLayer("sensor", "Value", "CpuLoad");
+        sensor["x"] = 42; sensor["y"] = 40;
+        auto bar = newLayer("bar", "Bar", "CpuLoad");
+        bar["x"] = 40; bar["y"] = 55;
+        auto group = newLayer("group", "Group");
+        group["children"] = QJsonArray{sensor, label, bar};
+        auto theme = Theme::starter();
+        theme.data["layers"] = QJsonArray{label, group};
+        Renderer renderer, reference;
+        Snapshot sample;
+        for (double value : {100., 1., 0., 72., 72.1}) {
+            sample.values["CpuLoad"] = value;
+            const auto previous = renderer.render(theme, sample);
+            QCOMPARE(previous, reference.renderFull(theme, sample));
+            auto next = sample; next.values["CpuLoad"] = 99;
+            renderer.render(theme, next);
+            QCOMPARE(previous, reference.renderFull(theme, sample)); // Shared old frames stay immutable.
+        }
+        theme.data["background_color"] = rgba(QColor("#ee7799"));
+        QCOMPARE(renderer.render(theme, sample), reference.renderFull(theme, sample));
+        theme.data["landscape"] = false;
+        QCOMPARE(renderer.render(theme, sample), reference.renderFull(theme, sample));
+    }
+    void collectorRequestsOnlyConsumedMetrics() {
+        Collector collector;
+        const QSet<QString> clock{"Time"};
+        const auto time = collector.collect({}, &clock);
+        QCOMPARE(time.strings.keys(), QStringList{"Time"});
+        QVERIFY(time.values.isEmpty());
+        const QSet<QString> empty;
+        const auto idle = collector.collect({}, &empty);
+        QVERIFY(idle.values.isEmpty()); QVERIFY(idle.strings.isEmpty());
+        QVERIFY(idle.sources.isEmpty()); QVERIFY(idle.unavailable.isEmpty());
+        const QSet<QString> ram{"RamLoad"};
+        const auto memory = collector.collect({}, &ram);
+        QVERIFY(memory.values.contains("RamLoad"));
+        QCOMPARE(memory.values.size(), 1);
+        QVERIFY(memory.strings.isEmpty());
+    }
+    void themeLibraryRoundTripsAndRejectsUnsafeOperations() {
+        QTemporaryDir profile, outside;
+        ThemeLibrary library;
+        QJsonObject config{{"theme_library_root", profile.path() + "/themes"}, {"theme_library_seeded", true}, {"theme_library_version", 1}};
+        library.initialize(profile.path(), config);
+        const auto folder = library.createFolder(library.root + "/custom", "My themes");
+        const auto child = library.createFolder(folder, "Nested");
+        auto theme = Theme::starter();
+        const auto file = child + "/original.json"; theme.save(file);
+        const auto renamed = library.renameTheme(file, QString::fromUtf8("自定义主题"));
+        QVERIFY(!QFileInfo::exists(file));
+        QCOMPARE(Theme::load(renamed).name(), QString::fromUtf8("自定义主题"));
+        auto expected = theme.data; expected["name"] = QString::fromUtf8("自定义主题");
+        QCOMPARE(Theme::load(renamed).data, expected);
+        const auto copy = library.transfer(renamed, child, true);
+        QVERIFY(copy != renamed); QCOMPARE(Theme::load(copy).data, expected);
+        QVERIFY_EXCEPTION_THROWN(library.transfer(folder, child, false), std::runtime_error);
+        QVERIFY_EXCEPTION_THROWN(library.createFolder(folder, "../outside"), std::runtime_error);
+        QVERIFY_EXCEPTION_THROWN(library.purge(library.root + "/official"), std::runtime_error);
+        const auto external = outside.path() + "/keep.json"; theme.save(external);
+        QVERIFY_EXCEPTION_THROWN(library.purge(external), std::runtime_error);
+        QVERIFY(QFileInfo::exists(external));
+        const auto official = library.root + "/official/original.data";
+        QVERIFY(QFile::copy(assets() + "/themes/official/微星.data", official));
+        QFile officialFile(official); QVERIFY(officialFile.open(QIODevice::ReadOnly));
+        const auto officialBytes = officialFile.readAll(); officialFile.close();
+        const auto officialRenamed = library.renameTheme(official, "Renamed official");
+        QVERIFY(officialRenamed.endsWith(".data"));
+        QFile renamedFile(officialRenamed); QVERIFY(renamedFile.open(QIODevice::ReadOnly));
+        QCOMPARE(renamedFile.readAll(), officialBytes); renamedFile.close();
+        const auto deleted = library.recycle(folder);
+        QVERIFY(!QFileInfo::exists(folder)); QVERIFY(library.recycled(deleted));
+        const auto restored = library.restore(deleted);
+        QCOMPARE(restored, folder); QCOMPARE(Theme::load(renamed).data, expected);
+        const auto again = library.recycle(folder);
+        library.purge(again); QVERIFY(!QFileInfo::exists(again));
+        for (const auto &name : {QString("CON"), QString("a/b"), QString("a\\b"), QString(".."), QString("bad.")})
+            QVERIFY(!ThemeLibrary::validName(name));
+    }
+    void legacyPersonalThemeMigrationKeepsSelection() {
+        QTemporaryDir profile, external;
+        QDir().mkpath(profile.path() + "/themes");
+        QDir().mkpath(profile.path() + "/deleted-themes");
+        const auto original = profile.path() + "/themes/old.json";
+        const auto removed = profile.path() + "/deleted-themes/removed.json";
+        Theme::starter().save(original); Theme::starter().save(removed);
+        QDir().mkpath(profile.path() + "/themes/Collection");
+        const auto nested = profile.path() + "/themes/Collection/deep.json";
+        Theme::starter().save(nested);
+        QDir().mkpath(profile.path() + "/themes/custom");
+        QVERIFY(QFile::copy(assets() + "/themes/custom/nightfall.json", profile.path() + "/themes/custom/nightfall.json"));
+        const auto imported = external.path() + "/import.json"; Theme::starter().save(imported);
+        QJsonObject config{{"theme_library_root", profile.path() + "/themes"}, {"theme_library_seeded", true}, {"selected_theme", original},
+            {"external_themes", QJsonArray{imported}}, {"theme_orientations", QJsonObject{{original, 3}, {"builtin:nightfall.json", 1}}}};
+        ThemeLibrary library; library.initialize(profile.path(), config);
+        const auto migrated = library.root + "/custom/old.json";
+        QCOMPARE(config["selected_theme"].toString(), migrated);
+        QVERIFY(QFileInfo::exists(migrated)); QVERIFY(!QFileInfo::exists(original));
+        QVERIFY(QFileInfo::exists(library.root + "/custom/Collection/deep.json"));
+        QCOMPARE(library.resolve(nested, profile.path()), library.root + "/custom/Collection/deep.json");
+        QCOMPARE(config["theme_orientations"].toObject()[migrated].toInt(), 3);
+        QCOMPARE(config["theme_orientations"].toObject()[library.root + "/custom/nightfall.json"].toInt(), 1);
+        QVERIFY(QFileInfo::exists(imported)); QVERIFY(QFileInfo::exists(library.root + "/custom/import.json"));
+        QVERIFY(config["external_themes"].toArray().isEmpty());
+        QVERIFY(QFileInfo::exists(library.root + "/deleted/removed.json"));
+        QCOMPARE(library.restore(library.root + "/deleted/removed.json"), library.root + "/custom/removed.json");
+    }
     void protocol() {
         QCOMPARE(Protocol::header(0, 0, 319, 479, 0xc5).toHex(), QByteArray("000004fddfc5"));
         QCOMPARE(Protocol::header(0, 0, 479, 319, 0xc5).toHex(), QByteArray("0000077d3fc5"));
@@ -202,7 +310,7 @@ private slots:
                 checkBindings(layer["children"].toArray());
             }
         };
-        QDirIterator it(assets() + "/official/config", {"*.data"}, QDir::Files);
+        QDirIterator it(assets() + "/themes/official", {"*.data"}, QDir::Files);
         int count = 0;
         while (it.hasNext()) {
             auto file = it.next();
@@ -218,6 +326,67 @@ private slots:
             ++count;
         }
         QVERIFY(count >= 36);
+    }
+    void systemOverviewIsAFileWithTheOriginalRendering() {
+        const auto file = assets() + "/themes/custom/system overview.json";
+        QVERIFY(QFileInfo::exists(file));
+        const auto theme = Theme::load(file);
+        QCOMPARE(theme.name(), QString("System overview"));
+        QCOMPARE(theme.layers().size(), 4);
+        Renderer renderer;
+        Snapshot sample;
+        sample.values["CpuLoad"] = 46;
+        sample.values["RamLoad"] = 72;
+        sample.values["InternetDown"] = 123456;
+        QCOMPARE(renderer.render(theme, sample), renderer.render(Theme::starter(), sample));
+    }
+    void legacyOfficialPathsAndRecycleTargetsUseTheFlatDirectory() {
+        QTemporaryDir profile;
+        const auto root = profile.path() + "/themes";
+        QDir().mkpath(root + "/official");
+        QVERIFY(QFile::copy(assets() + "/themes/official/微星.data", root + "/official/微星.data"));
+        QVERIFY(QFile::copy(assets() + "/themes/custom/system overview.json", root + "/official/system overview.json"));
+        const auto legacy = QString::fromUtf8("C:/old/assets/themes/official/config/微星.data");
+        QJsonObject config{{"theme_library_root", root}, {"theme_library_version", 1}, {"theme_folder", "official/config"},
+            {"selected_theme", legacy}, {"theme_orientations", QJsonObject{{"builtin:official/config/微星.data", 3}, {"__starter__", 1}}}};
+        ThemeLibrary library; library.initialize(profile.path(), config);
+        QCOMPARE(config["selected_theme"].toString(), root + "/official/微星.data");
+        QCOMPARE(config["theme_folder"].toString(), QString("official"));
+        QCOMPARE(config["theme_orientations"].toObject()[root + "/official/微星.data"].toInt(), 3);
+        QCOMPARE(config["theme_orientations"].toObject()[root + "/custom/system overview.json"].toInt(), 1);
+        const auto recycled = library.recycle(root + "/official/微星.data");
+        QFile index(root + "/.recycle.json"); QVERIFY(index.open(QIODevice::WriteOnly));
+        index.write(QJsonDocument(QJsonObject{{QDir(root).relativeFilePath(recycled), "official/config/微星.data"}}).toJson()); index.close();
+        QCOMPARE(library.restore(recycled), root + "/official/微星.data");
+        QVERIFY(!QFileInfo::exists(root + "/official/config"));
+    }
+    void overviewMovesToCustomWithoutOverwritingUserThemes() {
+        QTemporaryDir profile;
+        const auto root = profile.path() + "/themes";
+        QDir().mkpath(root + "/official");
+        const auto old = root + "/official/system overview.json";
+        QVERIFY(QFile::copy(assets() + "/themes/custom/system overview.json", old));
+        QJsonObject config{{"theme_library_root", root}, {"theme_library_version", 1}, {"selected_theme", old},
+                           {"theme_orientations", QJsonObject{{old, 3}}}};
+        ThemeLibrary library;
+        library.initialize(profile.path(), config);
+        const auto personal = root + "/custom/system overview.json";
+        QVERIFY(!QFileInfo::exists(old));
+        QCOMPARE(library.defaultThemeFile(), personal);
+        QCOMPARE(config["selected_theme"].toString(), personal);
+        QCOMPARE(config["theme_orientations"].toObject()[personal].toInt(), 3);
+        QCOMPARE(library.resolve("C:/old/assets/themes/official/system overview.json"), personal);
+        auto changed = Theme::load(personal);
+        changed.data["name"] = "My overview";
+        changed.save(personal);
+        QVERIFY(QFile::copy(assets() + "/themes/custom/system overview.json", old));
+        config["selected_theme"] = old;
+        library.initialize(profile.path(), config);
+        QCOMPARE(Theme::load(personal).name(), QString("My overview"));
+        QCOMPARE(config["selected_theme"].toString(), root + "/custom/system overview (2).json");
+        QVERIFY(!QFileInfo::exists(old));
+        library.initialize(profile.path(), config);
+        QCOMPARE(config["selected_theme"].toString(), root + "/custom/system overview (2).json");
     }
     void jsonMigration() {
         Theme t = Theme::starter();
@@ -252,7 +421,7 @@ private slots:
     void malformedFiles() {
         QVERIFY_THROWS_EXCEPTION(std::runtime_error, Nrbf::Document::parse("bad"));
         QVERIFY_THROWS_EXCEPTION(std::runtime_error, Theme::fromJson({{"layers", QJsonArray()}}));
-        QFile f(assets() + "/official/config/微星.data");
+        QFile f(assets() + "/themes/official/微星.data");
         QVERIFY(f.open(QIODevice::ReadOnly));
         auto bytes = f.readAll();
         for (int n : {0, 1, 10, int(bytes.size() / 2)})
@@ -273,7 +442,7 @@ private slots:
         QVERIFY(fixture.open(QIODevice::ReadOnly));
         auto sample = Snapshot::fromJson(QJsonDocument::fromJson(fixture.readAll()).object());
         Renderer renderer;
-        auto actual = renderer.render(Theme::load(assets() + "/official/config/微星.data"), sample, true);
+        auto actual = renderer.render(Theme::load(assets() + "/themes/official/微星.data"), sample, true);
         QImage reference(QString::fromUtf8(SCREEN_FIXTURE_DIR) + "/msi-editor-reference.png");
         QVERIFY(!reference.isNull());
         QCOMPARE(actual.convertToFormat(QImage::Format_RGB32),
@@ -312,7 +481,7 @@ private slots:
         }
     }
     void dashboardLayoutAndBundledIcons() {
-        const auto theme = Theme::load(assets() + "/themes/nightfall.json");
+        const auto theme = Theme::load(assets() + "/themes/custom/nightfall.json");
         QCOMPARE(theme.size(), QSize(480, 320));
         QCOMPARE(theme.orientation(), 3);
         QSet<QString> groups, registered;
@@ -425,7 +594,7 @@ private slots:
         Snapshot sample;
         sample.strings["RamSpec"] = parseMemoryInfo(ddr4).specification;
         QCOMPARE(sample.text("RamSpec"), QString("DDR4/3200MHz"));
-        const auto theme = Theme::load(assets() + "/themes/nightfall.json");
+        const auto theme = Theme::load(assets() + "/themes/custom/nightfall.json");
         const auto heading = findLayer(theme.layers(), "nightfall-ram-heading");
         const auto spec = findLayer(theme.layers(), "nightfall-ram-spec");
         QCOMPARE(spec["y"].toDouble() + spec["baseline"].toDouble(), heading["y"].toDouble() + heading["baseline"].toDouble());
@@ -525,7 +694,7 @@ private slots:
         Renderer renderer;
         auto theme = Theme::starter();
         theme.data["background_color"] = rgba(Qt::transparent);
-        auto label = findLayer(Theme::load(assets() + "/themes/nightfall.json").layers(), "nightfall-system-version");
+        auto label = findLayer(Theme::load(assets() + "/themes/custom/nightfall.json").layers(), "nightfall-system-version");
         label["kind"] = "text";
         label["metric"] = "";
         label["text"] = "Windows 11 26H2";
@@ -659,6 +828,35 @@ private slots:
         QVERIFY(off.unavailable.value("Weather").contains("disabled"));
         QVERIFY(!off.strings.contains("WeatherIcon"));
         QVERIFY(off.unavailable.contains("WeatherIcon"));
+    }
+    void manualWeatherRefreshBypassesCacheAndBackoffWithoutDuplicates() {
+        WeatherNetwork network;
+        WeatherClient weather(&network);
+        QSignalSpy changes(&weather, &WeatherClient::changed);
+        QVERIFY(!weather.refreshNow());
+        weather.configure(true, "Test City");
+        network.responses = {R"({"results":[{"name":"Test City","latitude":25,"longitude":121}]})",
+                             R"({"current":{"temperature_2m":23.5,"weather_code":61}})"};
+        QVERIFY(weather.refreshNow());
+        QVERIFY(!weather.refreshNow());
+        QTRY_VERIFY(!weather.status().busy);
+        QVERIFY(weather.status().summary.contains("23.5"));
+        QCOMPARE(network.requests.size(), 2);
+        network.responses = {"network-timeout"};
+        QVERIFY(weather.refreshNow()); // Bypass the successful result's 10-minute cache.
+        QTRY_VERIFY(!weather.status().busy);
+        QVERIFY(weather.status().error.contains("timed out"));
+        QVERIFY(weather.status().summary.contains("23.5"));
+        network.responses = {R"({"current":{"temperature_2m":24.5,"weather_code":0}})"};
+        QVERIFY(weather.refreshNow()); // Retry without waiting for the error backoff.
+        QTRY_VERIFY(!weather.status().busy);
+        QVERIFY(weather.status().error.isEmpty());
+        QVERIFY(weather.status().summary.contains("24.5"));
+        QCOMPARE(network.requests.size(), 4);
+        QVERIFY(changes.count() >= 7);
+        Snapshot sample; weather.apply(sample, false);
+        QCOMPARE(sample.values.value("WeatherTemp"), 24.5);
+        QCOMPARE(network.requests.size(), 4);
     }
     void weatherIpAndInvalidResponses() {
         WeatherNetwork network;

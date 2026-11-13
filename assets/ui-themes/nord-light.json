@@ -1,0 +1,26 @@
+{
+  "format": "turing-ui-palette",
+  "version": 1,
+  "name": "Nord Snow Storm",
+  "mode": "light",
+  "order": 31,
+  "source": "https://github.com/nordtheme/nord",
+  "colors": {
+    "window": "#eceff4",
+    "base": "#e5e9f0",
+    "button": "#d8dee9",
+    "alternate_base": "#d8dee9",
+    "text": "#2e3440",
+    "muted": "#4c566a",
+    "border": "#4c566a",
+    "accent": "#88c0d0",
+    "accent_text": "#2e3440",
+    "link": "#5e81ac",
+    "tooltip": "#d8dee9",
+    "tooltip_text": "#2e3440",
+    "disabled_text": "#4c566a",
+    "success": "#3b6b45",
+    "warning": "#8b6914",
+    "error": "#a33e48"
+  }
+}

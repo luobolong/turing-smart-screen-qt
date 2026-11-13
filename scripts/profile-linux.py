@@ -57,7 +57,7 @@ def run_case(args, name, mode="window", scenario="preview", theme="nightfall", *
                "--snapshot", str(ROOT / "tests/fixtures/nightfall-sample.json"), "--output", str(report),
                "--data-dir", str(destination / "data")]
     if theme == "nightfall":
-        command.extend(["--theme", str(ROOT / "assets/themes/nightfall.json")])
+        command.extend(["--theme", str(ROOT / "assets/themes/custom/nightfall.json")])
     elif theme:
         command.extend(["--theme", str(Path(theme).resolve())])
     if free_size:
@@ -198,7 +198,6 @@ def main():
         ("editor", {"scenario": "editor"}),
         ("sensors", {"scenario": "sensors"}),
         ("settings", {"scenario": "settings"}),
-        ("diagnostics", {"scenario": "diagnostics"}),
         ("hidden", {"scenario": "hidden"}),
         ("frozen", {"scenario": "frozen"}),
         ("render_only", {"scenario": "render-only"}),

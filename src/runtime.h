@@ -1,4 +1,5 @@
 #pragma once
+#include "themelibrary.h"
 #include "device.h"
 #include "renderer.h"
 #include "sensors.h"
@@ -9,7 +10,8 @@ namespace Screen {
 class DisplayRuntime : public QObject {
     Q_OBJECT
 public:
-    DisplayRuntime(QString directory, const QString &initialTheme = {});
+    ThemeLibrary library;
+    DisplayRuntime(QString directory, const QString &initialTheme = {}, QNetworkAccessManager *weatherNetwork = nullptr);
     QString dataDir, path, error;
     QJsonObject config;
     Theme theme;
@@ -20,9 +22,15 @@ public:
     QImage frame;
     QTimer sampling;
     bool sending = false, preview = false, lightweight = false;
+    bool allMetrics = false;
+    bool weatherSettingsVisible = false;
     quint64 renderedFrames = 0;
-    void configureWeather();
+    void configureWeather(bool force = false);
+    bool requestWeather();
     void configureSensors();
+    bool collectionEnabled() const { return config.value("collect_data").toBool(true); }
+    void setCollectionEnabled(bool enabled);
+    QSet<QString> requestedMetrics() const;
     void setLightweight(bool value);
     void startSending();
     void tick();
@@ -31,6 +39,7 @@ public:
     bool persist(QString *error = nullptr);
 signals:
     void updated();
+    void weatherStatusChanged();
 private:
     bool backgroundIdle = false;
 };

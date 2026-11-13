@@ -118,19 +118,33 @@ double Snapshot::percentage(const QString &metric) const {
         v /= 30.;
     return qBound(0., v, 100.);
 }
-Collector::Collector(const QString &sysfsRoot, const QString &procRoot) : sysfsRoot(sysfsRoot), procRoot(procRoot) {
-    memoryInfo = currentMemoryInfo(sysfsRoot);
+Collector::Collector(const QString &sysfsRoot, const QString &procRoot, QNetworkAccessManager *weatherNetwork)
+    : sysfsRoot(sysfsRoot), procRoot(procRoot), weatherNetwork(weatherNetwork) {
     elapsed.start();
-    setAudioEnabled(true);
 }
 void Collector::setWeather(bool enabled, const QString &city) {
-    if (!enabled) { weather.reset(); return; }
-    if (!weather) weather = std::make_unique<WeatherClient>();
+    if (!enabled) {
+        if (weather) { weather.reset(); if (weatherChanged) weatherChanged(); }
+        return;
+    }
+    if (!weather) {
+        weather = std::make_unique<WeatherClient>(weatherNetwork);
+        QObject::connect(weather.get(), &WeatherClient::changed, weather.get(), [this] { if (weatherChanged) weatherChanged(); });
+    }
     weather->configure(true, city);
 }
+bool Collector::refreshWeather() { return weather && weather->refreshNow(); }
+WeatherStatus Collector::weatherStatus() const { return weather ? weather->status() : WeatherStatus{}; }
+void Collector::applyWeather(Snapshot &sample) {
+    for (const auto &key : {"Weather", "WeatherCity", "WeatherTemp", "WeatherCondition", "WeatherIcon"}) {
+        sample.values.remove(key); sample.strings.remove(key);
+        sample.sources.remove(key); sample.unavailable.remove(key);
+    }
+    if (weather) weather->apply(sample, false);
+}
 void Collector::setAudioEnabled(bool enabled) {
+    audioEnabled = enabled;
     if (!enabled) audio.reset();
-    else if (!audio) audio = std::make_unique<AudioVolume>();
 }
 void Collector::setWindowsSource(const QString &source, int port, int gpuIndex) {
 #ifdef Q_OS_WIN
@@ -293,20 +307,31 @@ static void collectAmdGpu(Snapshot &s, const QString &sysfsRoot) {
         s.sources["GpuRamUsage"] = "amdgpu / " + QFileInfo(device).dir().dirName();
 }
 #endif
-Snapshot Collector::collect(const QString &disk) {
+Snapshot Collector::collect(const QString &disk, const QSet<QString> *requested) {
     Snapshot s;
+    const auto wants = [&](const QString &key) { return !requested || requested->contains(key); };
+    const auto prefix = [&](const QString &key) {
+        if (!requested) return true;
+        for (const auto &metric : *requested) if (metric.startsWith(key)) return true;
+        return false;
+    };
+    const bool cpuLoad = wants("CpuLoad"), network = prefix("Internet");
+    const bool ram = wants("RamLoad") || wants("RamValue") || wants("RamValid") || wants("RamTotal") ||
+                     wants("RamModel") || wants("RamUsage");
+    const bool hardware = wants("CpuTemp") || wants("CpuPower") || wants("CpuFan") || wants("CpuPump") ||
+                          wants("CpuVoltage") || wants("CpuFreq") || prefix("Gpu") || wants("HDDTemp");
     const double seconds = qMax(.001, elapsed.restart() / 1000.);
     quint64 total = 0, idle = 0, up = 0, down = 0;
 #ifdef Q_OS_WIN
     FILETIME i, k, u;
     auto time = [](FILETIME f) { return (quint64(f.dwHighDateTime) << 32) | f.dwLowDateTime; };
-    if (GetSystemTimes(&i, &k, &u)) {
+    if (cpuLoad && GetSystemTimes(&i, &k, &u)) {
         idle = time(i);
         total = time(k) + time(u);
     }
     MEMORYSTATUSEX memory{};
     memory.dwLength = sizeof(memory);
-    if (GlobalMemoryStatusEx(&memory)) {
+    if (ram && GlobalMemoryStatusEx(&memory)) {
         s.values["RamValue"] = double(memory.ullTotalPhys - memory.ullAvailPhys);
         s.values["RamValid"] = double(memory.ullAvailPhys);
         s.values["RamTotal"] = double(memory.ullTotalPhys);
@@ -314,7 +339,7 @@ Snapshot Collector::collect(const QString &disk) {
         s.strings["RamModel"] = QString::number(double(memory.ullTotalPhys) / 1073741824., 'f', 0) + " GB";
     }
     MIB_IF_TABLE2 *table = nullptr;
-    if (GetIfTable2(&table) == NO_ERROR) {
+    if (network && GetIfTable2(&table) == NO_ERROR) {
         for (ULONG n = 0; n < table->NumEntries; ++n) {
             const auto &row = table->Table[n];
             if (row.Type != IF_TYPE_SOFTWARE_LOOPBACK && row.Type != IF_TYPE_TUNNEL &&
@@ -328,16 +353,18 @@ Snapshot Collector::collect(const QString &disk) {
     s.unavailable["CpuFreq"] = "Windows system API cannot provide a reliable live CPU clock; select a Windows sensor source in Settings";
     wchar_t name[256];
     DWORD bytes = sizeof(name);
-    if (RegGetValueW(HKEY_LOCAL_MACHINE, L"HARDWARE\\DESCRIPTION\\System\\CentralProcessor\\0",
+    if (wants("CpuModel") && cpuModel.isEmpty() && RegGetValueW(HKEY_LOCAL_MACHINE, L"HARDWARE\\DESCRIPTION\\System\\CentralProcessor\\0",
                      L"ProcessorNameString", RRF_RT_REG_SZ, nullptr, name, &bytes) == ERROR_SUCCESS)
-        s.strings["CpuModel"] = QString::fromWCharArray(name).trimmed();
+        cpuModel = QString::fromWCharArray(name).trimmed();
 #else
+    if (cpuLoad) {
     auto stat = read(procRoot + "/stat").split('\n').value(0).simplified().split(' ');
     for (int n = 1; n < qMin(9, int(stat.size())); ++n)
         total += stat[n].toULongLong();
     idle = stat.value(4).toULongLong() + stat.value(5).toULongLong();
+    }
     QHash<QByteArray, quint64> memory;
-    for (auto line : read(procRoot + "/meminfo").split('\n')) {
+    for (auto line : (ram ? read(procRoot + "/meminfo") : QByteArray()).split('\n')) {
         auto parts = line.simplified().split(' ');
         if (parts.size() > 1)
             memory[parts[0]] = parts[1].toULongLong() * 1024;
@@ -350,7 +377,7 @@ Snapshot Collector::collect(const QString &disk) {
         s.values["RamLoad"] = (all - available) * 100 / all;
         s.strings["RamModel"] = QString::number(all / 1073741824., 'f', 0) + " GB";
     }
-    for (auto line : read(procRoot + "/net/dev").split('\n')) {
+    for (auto line : (network ? read(procRoot + "/net/dev") : QByteArray()).split('\n')) {
         auto p = line.split(':');
         if (p.size() != 2 || p[0].trimmed() == "lo")
             continue;
@@ -358,29 +385,30 @@ Snapshot Collector::collect(const QString &disk) {
         down += c.value(0).toULongLong();
         up += c.value(8).toULongLong();
     }
-    const auto cpu = read(procRoot + "/cpuinfo");
+    const auto cpu = wants("CpuFreq") || (wants("CpuModel") && cpuModel.isEmpty()) ? read(procRoot + "/cpuinfo") : QByteArray();
     for (auto line : cpu.split('\n')) {
         int at = line.indexOf(':');
         if (at < 0)
             continue;
         auto key = line.left(at).trimmed();
         if (key == "model name")
-            s.strings["CpuModel"] = QString::fromUtf8(line.mid(at + 1).trimmed());
+            cpuModel = QString::fromUtf8(line.mid(at + 1).trimmed());
         if (key == "cpu MHz")
             s.values["CpuFreq"] = line.mid(at + 1).trimmed().toDouble();
-        if (s.values.contains("CpuFreq") && s.strings.contains("CpuModel"))
+        if (s.values.contains("CpuFreq") && !cpuModel.isEmpty())
             break;
     }
 #endif
 #ifdef Q_OS_LINUX
-    collectAmdGpu(s, sysfsRoot);
+    if (prefix("Gpu")) collectAmdGpu(s, sysfsRoot);
 #endif
+    if (wants("CpuModel") && !cpuModel.isEmpty()) s.strings["CpuModel"] = cpuModel;
     if (previousTotal && total > previousTotal && idle >= previousIdle)
         s.values["CpuLoad"] = qBound(0.,
                                      100. * double((total - previousTotal) - (idle - previousIdle)) /
                                          double(total - previousTotal),
                                      100.);
-    if (previousTotal) {
+    if (network && networkReady) {
         if (up >= previousUp)
             s.values["InternetUp"] = double(up - previousUp) / seconds;
         if (down >= previousDown)
@@ -390,16 +418,19 @@ Snapshot Collector::collect(const QString &disk) {
     previousIdle = idle;
     previousUp = up;
     previousDown = down;
-    QStorageInfo storage(disk.isEmpty() ? QDir::rootPath() : disk);
+    networkReady = network;
+    QStorageInfo storage;
+    if (prefix("HDD")) storage.setPath(disk.isEmpty() ? QDir::rootPath() : disk);
     if (storage.isReady() && storage.bytesTotal() > 0) {
         s.values["HDDLoad"] =
             100. * double(storage.bytesTotal() - storage.bytesAvailable()) / double(storage.bytesTotal());
     }
 #ifdef Q_OS_LINUX
-    collectLinuxHardware(s, sysfsRoot, storage.device(), seconds, previousEnergy);
+    if (hardware) collectLinuxHardware(s, sysfsRoot, storage.device(), seconds, previousEnergy);
+    else previousEnergy.clear();
 #endif
 #ifdef Q_OS_WIN
-    if (windowsHardware) windowsHardware->apply(s);
+    if (windowsHardware && hardware) windowsHardware->apply(s);
     else for (const auto &key : {"CpuTemp", "CpuPower", "CpuFan", "CpuPump", "CpuVoltage", "GpuModel", "GpuLoad", "GpuTemp", "GpuFreq", "GpuPower", "GpuFan", "GpuVoltage", "GpuRam", "GpuRamTotal", "GpuRamFree", "GpuRamLoad", "GpuRamUsage", "HDDTemp"})
         s.unavailable[key] = "Select HWiNFO, AIDA64 or LibreHardwareMonitor in Settings / Windows sensors";
 #endif
@@ -407,11 +438,17 @@ Snapshot Collector::collect(const QString &disk) {
         s.strings["RamUsage"] = QString::number(s.values["RamValue"] / 1073741824., 'f', 1) + " / " +
                                 QString::number(s.values["RamTotal"] / 1073741824., 'f', 1) + " GB";
     }
-    if (!memoryInfo.specification.isEmpty()) {
+    if (wants("RamSpec") && !memoryInfoReady) {
+        memoryInfo = currentMemoryInfo(sysfsRoot);
+        memoryInfoReady = true;
+    }
+    if (wants("RamSpec") && !memoryInfo.specification.isEmpty()) {
         s.strings["RamSpec"] = memoryInfo.specification;
         s.sources["RamSpec"] = "SMBIOS / DDR type and Configured Memory Speed";
     } else s.unavailable["RamSpec"] = memoryInfo.error;
-    if (const auto volume = audio ? audio->sample() : std::optional<double>()) {
+    if (wants("Volume") && audioEnabled && !audio) audio = std::make_unique<AudioVolume>();
+    if (!wants("Volume")) audio.reset();
+    if (const auto volume = wants("Volume") && audio ? audio->sample() : std::optional<double>()) {
         s.values["Volume"] = *volume;
         s.sources["Volume"] = "System default audio output";
     } else {
@@ -424,21 +461,35 @@ Snapshot Collector::collect(const QString &disk) {
     s.strings["Date"] = now.toString("yyyy/M/d");
     s.strings["DateWeekday"] = now.toString("yyyy/MM/dd") + "  " +
                                QLocale(QLocale::English).dayName(now.date().dayOfWeek(), QLocale::ShortFormat);
-    const auto system = currentSystemIdentity();
-    s.strings["OsName"] = system.name;
-    s.strings["KernelVersion"] = system.kernel;
-    s.strings["OsIcon"] = system.icon;
+    if (wants("OsName") || wants("KernelVersion") || wants("OsIcon")) {
+        const auto system = currentSystemIdentity();
+        s.strings["OsName"] = system.name;
+        s.strings["KernelVersion"] = system.kernel;
+        s.strings["OsIcon"] = system.icon;
+    }
     for (const auto &key : {"OsName", "KernelVersion", "OsIcon"})
         s.sources[key] = QSysInfo::kernelType() == "winnt" ? "Windows system API / CurrentVersion" : "System API";
     s.strings["Weekday"] = QStringList{QStringLiteral("星期一"), QStringLiteral("星期二"),
                                      QStringLiteral("星期三"), QStringLiteral("星期四"),
                                      QStringLiteral("星期五"), QStringLiteral("星期六"),
                                      QStringLiteral("星期日")}.at(now.date().dayOfWeek() - 1);
-    collectLocalIp(s, procRoot);
-    if (weather) weather->apply(s);
+    if (wants("LocalIp")) {
+        if (!localIpAge.isValid() || localIpAge.elapsed() >= 30000) {
+            localIp = {};
+            collectLocalIp(localIp, procRoot);
+            localIpAge.start();
+        }
+        s.strings.insert(localIp.strings); s.sources.insert(localIp.sources); s.unavailable.insert(localIp.unavailable);
+    }
+    if (weather && prefix("Weather")) weather->apply(s);
     else for (const auto &key : {"Weather", "WeatherCity", "WeatherTemp", "WeatherCondition", "WeatherIcon"})
         s.unavailable[key] = "Weather disabled; enable it in Settings";
     for (const auto &metric : metrics()) {
+        if (!wants(metric.first)) {
+            s.values.remove(metric.first); s.strings.remove(metric.first);
+            s.sources.remove(metric.first); s.unavailable.remove(metric.first);
+            continue;
+        }
         if (s.values.contains(metric.first) || s.strings.contains(metric.first)) {
             if (!s.sources.contains(metric.first))
                 s.sources[metric.first] = "System API";

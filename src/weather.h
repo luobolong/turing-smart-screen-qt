@@ -5,14 +5,24 @@
 #include <functional>
 namespace Screen {
 struct Snapshot;
+struct WeatherStatus {
+    bool enabled = false, busy = false;
+    QString summary, error;
+    qint64 updated = 0;
+};
 class WeatherClient : public QObject {
+    Q_OBJECT
 public:
     explicit WeatherClient(QNetworkAccessManager *network = nullptr, QObject *parent = nullptr);
     ~WeatherClient() override;
     void configure(bool enabled, const QString &city);
-    void apply(Snapshot &sample);
+    void apply(Snapshot &sample, bool allowRefresh = true);
+    bool refreshNow();
+    WeatherStatus status() const { return {enabled, busy, summary, error, updated}; }
     static QString description(int code);
     static QString icon(int code);
+signals:
+    void changed();
 
 private:
     QNetworkAccessManager *network;

@@ -1,0 +1,7 @@
+Gruvbox palette by morhetz and contributors.
+Source: https://github.com/morhetz/gruvbox
+Palette: https://github.com/morhetz/gruvbox/blob/master/colors/gruvbox.vim
+Upstream README declares its license as MIT/X11:
+https://github.com/morhetz/gruvbox#license
+No upstream LICENSE file is present. This project adapts the published color
+values to Qt palette roles; it does not copy the Vim theme implementation.

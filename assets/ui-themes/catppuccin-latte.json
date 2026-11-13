@@ -1,0 +1,26 @@
+{
+  "format": "turing-ui-palette",
+  "version": 1,
+  "name": "Catppuccin Latte",
+  "mode": "light",
+  "order": 10,
+  "source": "https://github.com/catppuccin/palette",
+  "colors": {
+    "window": "#eff1f5",
+    "base": "#e6e9ef",
+    "button": "#ccd0da",
+    "alternate_base": "#dce0e8",
+    "text": "#4c4f69",
+    "muted": "#6c6f85",
+    "border": "#bcc0cc",
+    "accent": "#8839ef",
+    "accent_text": "#eff1f5",
+    "link": "#1e66f5",
+    "tooltip": "#dce0e8",
+    "tooltip_text": "#4c4f69",
+    "disabled_text": "#8c8fa1",
+    "success": "#40a02b",
+    "warning": "#df8e1d",
+    "error": "#d20f39"
+  }
+}

@@ -27,6 +27,7 @@ void WeatherClient::configure(bool useWeather, const QString &newCity) {
     summary.clear();
     error.clear();
     nextAttempt = updated = 0;
+    emit changed();
 }
 QString WeatherClient::description(int code) {
     switch (code) {
@@ -65,6 +66,7 @@ void WeatherClient::fail(const QString &message) {
     busy = false;
     error = message;
     nextAttempt = QDateTime::currentMSecsSinceEpoch() + 60000;
+    emit changed();
 }
 void WeatherClient::fetch(const QUrl &url, std::function<void(const QJsonObject &)> success) {
     QNetworkRequest request(url);
@@ -107,6 +109,8 @@ bool WeatherClient::coordinates(const QJsonObject &object) {
 }
 void WeatherClient::refresh() {
     busy = true;
+    error.clear();
+    emit changed();
     if (located) {
         forecast();
     } else if (city.isEmpty()) {
@@ -163,16 +167,22 @@ void WeatherClient::forecast() {
         nextAttempt = updated + 600000;
         error.clear();
         busy = false;
+        emit changed();
     });
 }
-void WeatherClient::apply(Snapshot &s) {
+bool WeatherClient::refreshNow() {
+    if (!enabled || busy) return false;
+    refresh();
+    return true;
+}
+void WeatherClient::apply(Snapshot &s, bool allowRefresh) {
     if (!enabled) {
         for (const auto &key : {"Weather", "WeatherCity", "WeatherTemp", "WeatherCondition", "WeatherIcon"})
             s.unavailable[key] = "Weather disabled; enable it in Settings";
         return;
     }
     const auto now = QDateTime::currentMSecsSinceEpoch();
-    if (!busy && now >= nextAttempt)
+    if (allowRefresh && !busy && now >= nextAttempt)
         refresh();
     if (!summary.isEmpty() && now - updated <= 1800000) {
         s.strings["Weather"] = summary;

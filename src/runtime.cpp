@@ -20,20 +20,38 @@ QString themeOrientationKey(const QString &file) {
     const auto canonical = QFileInfo(file).canonicalFilePath();
     return canonical.isEmpty() ? QFileInfo(file).absoluteFilePath() : canonical;
 }
-DisplayRuntime::DisplayRuntime(QString directory, const QString &initialTheme)
-    : dataDir(std::move(directory)) {
+DisplayRuntime::DisplayRuntime(QString directory, const QString &initialTheme, QNetworkAccessManager *weatherNetwork)
+    : dataDir(std::move(directory)), collector(QStringLiteral("/sys"), QStringLiteral("/proc"), weatherNetwork) {
+    collector.weatherChanged = [this] {
+        const auto state = collector.weatherStatus();
+        if (collectionEnabled() && !state.busy && (state.updated > 0 || !state.error.isEmpty())) {
+            collector.applyWeather(sample);
+            if (preview || (sending && device.status().connected)) render();
+            else emit updated();
+        }
+        emit weatherStatusChanged();
+    };
     QDir().mkpath(dataDir + "/themes");
     QFile input(dataDir + "/config.json");
     if (input.open(QIODevice::ReadOnly)) config = QJsonDocument::fromJson(input.readAll()).object();
+    library.initialize(dataDir, config);
     config.remove("palette"); // Retire the application palette preference from older versions.
-    theme = Theme::starter();
-    const auto selected = initialTheme.isEmpty() ? config["selected_theme"].toString() : initialTheme;
+    const auto selected = library.resolve(initialTheme.isEmpty() ? config["selected_theme"].toString() : initialTheme, dataDir);
     const auto relative = QDir(assets()).relativeFilePath(QFileInfo(selected).absoluteFilePath());
     const auto key = !relative.startsWith("../") && !QDir::isAbsolutePath(relative)
                          ? "builtin:" + relative : themeOrientationKey(selected);
     if (!selected.isEmpty() && (!initialTheme.isEmpty() || !config["hidden_themes"].toArray().contains(key))) {
-        try { theme = Theme::load(selected); path = selected; } catch (const std::exception &) {}
+        try {
+            theme = Theme::load(selected);
+            if (selected.endsWith(".data", Qt::CaseInsensitive)) theme.data["name"] = QFileInfo(selected).completeBaseName();
+            path = selected;
+        } catch (const std::exception &) {}
     }
+    if (path.isEmpty()) {
+        path = library.defaultThemeFile();
+        theme = Theme::load(path);
+    }
+    config["selected_theme"] = path;
     auto direction = config["theme_orientations"].toObject().value(themeOrientationKey(path));
     if (direction.isUndefined() && initialTheme.isEmpty() && !theme.data.contains("orientation"))
         direction = config["orientation"];
@@ -41,34 +59,86 @@ DisplayRuntime::DisplayRuntime(QString directory, const QString &initialTheme)
         direction.toDouble() == direction.toInt()) theme.data["orientation"] = direction.toInt();
     configureWeather();
     configureSensors();
-    connect(&sampling, &QTimer::timeout, this, &DisplayRuntime::tick);
+    connect(&sampling, &QTimer::timeout, this, [this] {
+        if (preview || allMetrics || (sending && device.status().connected)) tick();
+    });
     connect(&device, &Device::statusChanged, this, [this] {
         // Lightweight autostart starts sending before the asynchronous serial
         // connection completes, so wait for the first usable frame immediately.
         if (sending && device.status().connected) tick();
     }, Qt::QueuedConnection);
     sampling.setTimerType(Qt::CoarseTimer);
-    sampling.start(qBound(1000, config.value("interval_ms").toInt(1000), 10000));
-    sample = collector.collect(config["disk"].toString());
+    sampling.setInterval(qBound(1000, config.value("interval_ms").toInt(1000), 10000));
+    if (collectionEnabled()) {
+        sampling.start();
+        const auto requested = requestedMetrics();
+        sample = collector.collect(config["disk"].toString(), &requested);
+    }
 }
-void DisplayRuntime::configureWeather() {
-    const auto options = theme.data["weather"].toObject();
-    collector.setWeather(!backgroundIdle && (!lightweight || usesMetric(theme.layers(), "Weather")) &&
+QSet<QString> DisplayRuntime::requestedMetrics() const {
+    QSet<QString> result;
+    if (allMetrics && !lightweight) {
+        for (const auto &metric : metrics()) result.insert(metric.first);
+        return result;
+    }
+    std::function<void(const QJsonArray &)> visit = [&](const QJsonArray &layers) {
+        for (const auto &value : layers) {
+            const auto layer = value.toObject();
+            if (!layer["visible"].toBool(true)) continue;
+            const auto kind = layer["kind"].toString();
+            if (kind == "sensor" || kind == "bar" || kind == "arc") {
+                const auto metric = canonical(layer["metric"].toString());
+                if (!metric.isEmpty()) result.insert(metric);
+            }
+            if (kind == "group") visit(layer["children"].toArray());
+        }
+    };
+    visit(theme.layers());
+    return result;
+}
+void DisplayRuntime::setCollectionEnabled(bool enabled) {
+    if (enabled == collectionEnabled()) return;
+    config["collect_data"] = enabled;
+    if (enabled) sampling.start();
+    else sampling.stop();
+    configureSensors();
+    configureWeather();
+    collector.setAudioEnabled(enabled && !backgroundIdle);
+    persist();
+    if (enabled) tick();
+    emit updated();
+}
+void DisplayRuntime::configureWeather(bool force) {
+    const auto options = theme.data.value("weather").toObject();
+    collector.setWeather(collectionEnabled() && !backgroundIdle && (force || weatherSettingsVisible || (allMetrics && !lightweight) || usesMetric(theme.layers(), "Weather")) &&
                          config["weather_enabled"].toBool(options["enabled"].toBool()),
                          config["weather_city"].toString(options["city"].toString()));
 }
+bool DisplayRuntime::requestWeather() {
+    if (!collectionEnabled() || lightweight) return false;
+    configureWeather(true);
+    return collector.refreshWeather();
+}
 void DisplayRuntime::configureSensors() {
-    collector.setWindowsSource(config["windows_sensor_source"].toString("system"),
+    const auto requested = requestedMetrics();
+    bool hardware = false;
+    for (const auto &metric : requested)
+        hardware |= metric.startsWith("Gpu") || metric == "CpuFreq" || metric == "CpuTemp" ||
+                    metric == "CpuPower" || metric == "CpuFan" || metric == "CpuPump" ||
+                    metric == "CpuVoltage" || metric == "HDDTemp";
+    collector.setWindowsSource(collectionEnabled() && !backgroundIdle && hardware ? config["windows_sensor_source"].toString("system") : QStringLiteral("system"),
                                config["lhm_port"].toInt(8085), config["windows_gpu_index"].toInt(0));
 }
 void DisplayRuntime::setLightweight(bool value) {
     lightweight = value;
+    renderer.setStaticCaching(!value);
     backgroundIdle = value && !(sending && device.status().connected);
-    collector.setAudioEnabled(!backgroundIdle && (!value || usesMetric(theme.layers(), "Volume")));
+    collector.setAudioEnabled(collectionEnabled() && !backgroundIdle);
+    configureSensors();
     configureWeather();
     if (backgroundIdle) {
         frame = {};
-        sample = {};
+        if (collectionEnabled()) sample = {};
         renderer.clearCaches();
     }
 }
@@ -90,6 +160,7 @@ void DisplayRuntime::startSending() {
     if (status.connected) tick();
 }
 void DisplayRuntime::tick() {
+    if (!collectionEnabled()) return;
     // A paused/disconnected background session has no consumer for samples.
     if (lightweight && !(sending && device.status().connected)) {
         if (!backgroundIdle) setLightweight(true);
@@ -97,14 +168,18 @@ void DisplayRuntime::tick() {
     }
     if (backgroundIdle) setLightweight(lightweight);
     configureSensors();
-    sample = collector.collect(config["disk"].toString());
+    configureWeather();
+    const auto requested = requestedMetrics();
+    sample = collector.collect(config["disk"].toString(), &requested);
     if (preview || (sending && device.status().connected)) render();
     else emit updated();
 }
 void DisplayRuntime::render() {
     try {
-        frame = renderer.render(theme, sample);
-        ++renderedFrames;
+        if (frame.isNull() || !renderer.unchanged(theme, sample)) {
+            frame = renderer.render(theme, sample);
+            ++renderedFrames;
+        }
         error.clear();
         if (sending && device.status().connected) {
             QImage image = frame;
@@ -124,7 +199,7 @@ void DisplayRuntime::toggleSending() {
     }
     sending = !sending;
     if (lightweight) setLightweight(true);
-    if (sending) { sample = collector.collect(config["disk"].toString()); render(); }
+    if (sending) { if (collectionEnabled()) tick(); else render(); }
     else emit updated();
 }
 bool DisplayRuntime::persist(QString *failure) {

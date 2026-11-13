@@ -1,5 +1,7 @@
 #include "application.h"
+#include "uiappearance.h"
 #include <QtWidgets>
+#include <algorithm>
 #if defined(__GLIBC__)
 #include <malloc.h>
 #endif
@@ -8,7 +10,11 @@ ApplicationController::ApplicationController(QString directory, const QString &t
                                              std::function<bool()> available, bool autostart)
     : runtime(std::make_shared<DisplayRuntime>(std::move(directory), theme)),
       tray(new QSystemTrayIcon(this)), trayAvailable(std::move(available)) {
+    auto &appearance = UiAppearance::instance();
+    if (!appearance.apply(runtime->config["ui_theme"].toString("system"), runtime->dataDir).isEmpty())
+        appearance.apply("system", runtime->dataDir);
     qApp->setQuitOnLastWindowClosed(false);
+    qApp->setWindowIcon(applicationIcon());
     countdown.setSingleShot(true);
     countdown.setTimerType(Qt::PreciseTimer);
     connect(&countdown, &QTimer::timeout, this, [this] {
@@ -81,8 +87,23 @@ void ApplicationController::makeWindow() {
 void ApplicationController::makeTray() {
     if (!menu) {
         menu = std::make_unique<QMenu>();
+        UiAppearance::instance().configureSystemMenu(menu.get());
         connect(menu.get(), &QMenu::aboutToShow, this, &ApplicationController::updateTrayState);
         showAction = menu->addAction(QString(), this, &ApplicationController::showWindow);
+        menu->addSeparator();
+        collectAction = menu->addAction(QString(), this, [this](bool checked) { runtime->setCollectionEnabled(checked); });
+        collectAction->setObjectName("collectDataAction");
+        collectAction->setCheckable(true);
+        portsMenu = menu->addMenu(QString());
+        portsMenu->setObjectName("trayPortsMenu");
+        UiAppearance::instance().configureSystemMenu(portsMenu);
+        connect(portsMenu, &QMenu::aboutToShow, this, &ApplicationController::refreshPortMenu);
+        sendAction = menu->addAction(QString(), this, [this](bool checked) {
+            if (runtime->device.status().connected && checked != runtime->sending) runtime->toggleSending();
+            updateTrayState();
+        });
+        sendAction->setObjectName("sendDataAction");
+        sendAction->setCheckable(true);
         menu->addSeparator();
         lightAction = menu->addAction(QString(), this, [this](bool checked) {
             if (checked) enterLightweight();
@@ -91,32 +112,77 @@ void ApplicationController::makeTray() {
         }, Qt::QueuedConnection);
         lightAction->setObjectName("lightweightModeAction");
         lightAction->setCheckable(true);
-        sendAction = menu->addAction(QString(), this, [this](bool checked) {
-            if (runtime->device.status().connected && checked != runtime->sending) runtime->toggleSending();
-            updateTrayState();
-        });
-        sendAction->setObjectName("sendDataAction");
-        sendAction->setCheckable(true);
         menu->addSeparator();
         quitAction = menu->addAction(QString(), this, &ApplicationController::quit);
         tray->setContextMenu(menu.get());
     }
     showAction->setText(L("显示窗口", "Show window"));
+    collectAction->setText(L("采集数据", "Collect data"));
+    portsMenu->setTitle(L("连接设备", "Connect device"));
     lightAction->setText(L("轻量模式", "Lightweight mode"));
     sendAction->setText(L("发送数据", "Send data"));
     quitAction->setText(L("退出", "Exit"));
-    tray->setIcon(qApp->style()->standardIcon(QStyle::SP_ComputerIcon));
+    UiAppearance::instance().configureSystemMenu(menu.get());
+    UiAppearance::instance().configureSystemMenu(portsMenu);
+    tray->setIcon(applicationIcon());
     updateTrayState();
     tray->show();
 }
 void ApplicationController::updateTrayState() {
     if (!lightAction || !sendAction) return;
     const auto device = runtime->device.status();
+    collectAction->setChecked(runtime->collectionEnabled());
     lightAction->setChecked(isLightweight());
     lightAction->setEnabled(trayAvailable() && (!editor || !editor->startup->busy()));
     sendAction->setChecked(runtime->sending && device.connected);
     sendAction->setEnabled(device.connected && !device.connecting);
+    updatePortChecks(device);
     tray->setToolTip(isLightweight() ? L("Turing Screen · 轻量模式", "Turing Screen · Lightweight") : "Turing Screen");
+}
+void ApplicationController::refreshPortMenu() {
+    portsMenu->clear();
+    auto ports = listPorts();
+    const auto state = runtime->device.status();
+    if (state.connected && !state.port.isEmpty() && std::none_of(ports.begin(), ports.end(), [&](const Port &p) { return p.name == state.port; }))
+        ports.append({state.port, {}, true});
+    for (const auto &port : ports) {
+        auto action = portsMenu->addAction(port.name, this, [this, name = port.name] { connectTrayPort(name); });
+        action->setProperty("serialPort", port.name);
+        action->setToolTip(port.description);
+        action->setCheckable(true);
+        action->setEnabled(!state.connecting);
+    }
+    if (ports.isEmpty()) portsMenu->addAction(L("未发现串口", "No serial ports found"))->setEnabled(false);
+    portsMenu->addSeparator();
+    auto disconnect = portsMenu->addAction(L("断开连接", "Disconnect"), this, [this] {
+        runtime->sending = false; runtime->device.disconnectPort(); updateTrayState();
+    });
+    disconnect->setObjectName("trayDisconnect");
+    disconnect->setEnabled(state.connected || state.connecting);
+    portsMenu->addAction(L("刷新串口", "Refresh ports"), this, [this] {
+        QTimer::singleShot(0, this, &ApplicationController::refreshPortMenu);
+    });
+    updatePortChecks(state);
+}
+void ApplicationController::updatePortChecks(const DeviceStatus &state) {
+    if (!portsMenu) return;
+    for (auto action : portsMenu->actions()) {
+        const auto port = action->property("serialPort").toString();
+        if (!port.isEmpty()) {
+            action->setChecked(state.connected && state.port == port);
+            action->setEnabled(!state.connecting);
+        } else if (action->objectName() == "trayDisconnect") action->setEnabled(state.connected || state.connecting);
+    }
+}
+void ApplicationController::connectTrayPort(const QString &port) {
+    const auto state = runtime->device.status();
+    if (state.connecting) return;
+    if (state.connected && state.port == port) { updatePortChecks(state); return; }
+    runtime->config["port"] = port;
+    runtime->device.connectPort(port, runtime->theme.orientation(), runtime->config.value("brightness").toInt(75), runtime->config["mirror"].toBool());
+    runtime->persist();
+    if (editor) { editor->refreshPorts(); editor->updateStatus(); }
+    updateTrayState();
 }
 void ApplicationController::scheduleLightweight() {
     countdown.stop();
@@ -137,6 +203,7 @@ QJsonObject ApplicationController::editorState() const {
     return {{"saved", editor->saved}, {"undo", history(editor->undoHistory)}, {"redo", history(editor->redoHistory)},
             {"drafts", drafts}, {"clipboard", editor->clipboard}, {"selection", QJsonArray::fromStringList(editor->selection())},
             {"editing", editor->editing}, {"page", editor->page}, {"search", editor->search->text()},
+            {"library_query", editor->libraryQuery}, {"search_shown", !editor->librarySearchPanel->isHidden()},
             {"geometry", QString::fromLatin1(editor->saveGeometry().toBase64())}};
 }
 void ApplicationController::restoreEditor(const QJsonObject &state) {
@@ -163,6 +230,9 @@ void ApplicationController::restoreEditor(const QJsonObject &state) {
     editor->setEditing(state["editing"].toBool());
     editor->setPage(qBound(0, state["page"].toInt(), int(MainWindow::PageCount) - 1));
     editor->search->setText(state["search"].toString());
+    editor->libraryQuery = state["library_query"].toString();
+    editor->filterLibrary();
+    editor->findChild<QToolButton *>("libraryToggleSearch")->setChecked(state["search_shown"].toBool());
     editor->restoreGeometry(QByteArray::fromBase64(state["geometry"].toString().toLatin1()));
 }
 bool ApplicationController::enterLightweight() {

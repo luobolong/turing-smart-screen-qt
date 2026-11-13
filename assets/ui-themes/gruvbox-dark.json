@@ -1,0 +1,26 @@
+{
+  "format": "turing-ui-palette",
+  "version": 1,
+  "name": "Gruvbox Dark",
+  "mode": "dark",
+  "order": 50,
+  "source": "https://github.com/morhetz/gruvbox",
+  "colors": {
+    "window": "#282828",
+    "base": "#282828",
+    "button": "#3c3836",
+    "alternate_base": "#3c3836",
+    "text": "#ebdbb2",
+    "muted": "#bdae93",
+    "border": "#7c6f64",
+    "accent": "#d79921",
+    "accent_text": "#282828",
+    "link": "#83a598",
+    "tooltip": "#3c3836",
+    "tooltip_text": "#ebdbb2",
+    "disabled_text": "#928374",
+    "success": "#b8bb26",
+    "warning": "#fabd2f",
+    "error": "#fb4934"
+  }
+}

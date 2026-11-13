@@ -1,9 +1,9 @@
 ; Per-user Windows installer for Turing Screen, built by .github/workflows/ci.yml.
 ;
 ; Example:
-;   makensis /DAPP_VERSION=0.2.0 /DAPP_VERSION_QUAD=0.2.0.0 ^
-;     /DSOURCE_DIR=dist\turing-screen-qt-0.2.0-windows-x64 ^
-;     /DOUTPUT_FILE=dist\turing-screen-qt-0.2.0-windows-x64-installer.exe ^
+;   makensis /DAPP_VERSION=0.2.1 /DAPP_VERSION_QUAD=0.2.1.0 ^
+;     /DSOURCE_DIR=dist\turing-screen-qt-0.2.1-windows-x64 ^
+;     /DOUTPUT_FILE=dist\turing-screen-qt-0.2.1-windows-x64-installer.exe ^
 ;     scripts\windows-installer.nsi
 ;
 ; SOURCE_DIR must contain the fully deployed application (EXE, Qt DLLs, plugins,
@@ -19,7 +19,7 @@ SetCompressor /SOLID lzma
   !define APP_EXE "turing-screen-qt.exe"
 !endif
 !ifndef APP_VERSION
-  !define APP_VERSION "0.2.0"
+  !define APP_VERSION "0.2.1"
 !endif
 !ifndef APP_VERSION_QUAD
   !define APP_VERSION_QUAD "${APP_VERSION}.0"
@@ -49,6 +49,8 @@ InstallDirRegKey HKCU "Software\TuringScreenQt" "InstallDir"
 RequestExecutionLevel user
 BrandingText "${APP_NAME} ${APP_VERSION}"
 
+!define MUI_ICON "../assets/turing-screen.ico"
+!define MUI_UNICON "../assets/turing-screen.ico"
 !include "MUI2.nsh"
 
 !define MUI_ABORTWARNING

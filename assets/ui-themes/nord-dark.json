@@ -1,0 +1,26 @@
+{
+  "format": "turing-ui-palette",
+  "version": 1,
+  "name": "Nord Polar Night",
+  "mode": "dark",
+  "order": 30,
+  "source": "https://github.com/nordtheme/nord",
+  "colors": {
+    "window": "#2e3440",
+    "base": "#2e3440",
+    "button": "#3b4252",
+    "alternate_base": "#3b4252",
+    "text": "#eceff4",
+    "muted": "#d8dee9",
+    "border": "#4c566a",
+    "accent": "#88c0d0",
+    "accent_text": "#2e3440",
+    "link": "#81a1c1",
+    "tooltip": "#434c5e",
+    "tooltip_text": "#eceff4",
+    "disabled_text": "#81a1c1",
+    "success": "#a3be8c",
+    "warning": "#ebcb8b",
+    "error": "#bf616a"
+  }
+}

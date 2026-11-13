@@ -54,6 +54,7 @@ jobs:
         uses: jurplel/install-qt-action@a9c63c7c123f3069cff414e7e482d95dfa9d8125 # v4.4.1
         with:
           version: '6.8.3'
+          modules: 'qtsvg'
           arch: ${{ matrix.qt-arch }}
           cache: true
 
@@ -70,7 +71,7 @@ jobs:
 
       - name: Render bundled theme
         run: >-
-          ./build/ci/${{ matrix.executable }} --render-theme assets/themes/nightfall.json
+          ./build/ci/${{ matrix.executable }} --render-theme assets/themes/custom/nightfall.json
           --snapshot tests/fixtures/nightfall-sample.json --output build/ci/nightfall.png
 
       - name: Read project version
@@ -178,7 +179,7 @@ jobs:
           } > "$stage/BUILD-ENVIRONMENT.txt"
 
           QT_QPA_PLATFORM=offscreen "$stage/run.sh" --version
-          QT_QPA_PLATFORM=offscreen "$stage/run.sh" --render-theme assets/themes/nightfall.json \
+          QT_QPA_PLATFORM=offscreen "$stage/run.sh" --render-theme assets/themes/custom/nightfall.json \
             --snapshot tests/fixtures/nightfall-sample.json --output build/ci/nightfall-package.png
           test -s build/ci/nightfall-package.png
 

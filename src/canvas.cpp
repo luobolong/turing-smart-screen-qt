@@ -12,21 +12,30 @@ Canvas::Canvas(QWidget *parent) : QWidget(parent) {
     setAutoFillBackground(false);
 }
 void Canvas::setFrame(QImage f) {
+    if (frame.cacheKey() == f.cacheKey()) return;
     frame = std::move(f);
     update();
+    emit zoomChanged(zoom());
 }
 void Canvas::setFit(bool v) {
     fit = v;
     setMinimumSize(v ? QSize(240, 220)
                      : QSize(int(frame.width() * scale + 48), int(frame.height() * scale + 48)));
     update();
+    emit zoomChanged(zoom());
 }
 void Canvas::setZoom(double v) {
     scale = qBound(.25, v, 4.);
     fit = false;
-    setMinimumSize(int(frame.width() * scale + 48), int(frame.height() * scale + 48));
+    // Keep the viewport's layout stable; zoom changes the drawing, not the pane size.
+    setMinimumSize(160, 120);
     updateGeometry();
     update();
+    emit zoomChanged(zoom());
+}
+double Canvas::zoom() const {
+    const int width = frame.isNull() ? (theme ? theme->size().width() : 480) : frame.width();
+    return fit ? screenRect().width() / qMax(1, width) : scale;
 }
 QRectF Canvas::screenRect() const {
     QSize size = frame.isNull() ? (theme ? theme->size() : QSize(480, 320)) : frame.size();
@@ -280,6 +289,7 @@ void Canvas::wheelEvent(QWheelEvent *e) {
 void Canvas::resizeEvent(QResizeEvent *e) {
     QWidget::resizeEvent(e);
     update();
+    emit zoomChanged(zoom());
 }
 void Canvas::keyPressEvent(QKeyEvent *e) {
     if (theme && editing && e->key() >= Qt::Key_Left && e->key() <= Qt::Key_Down) {

@@ -61,8 +61,8 @@ class PerformanceProbe {
     }
     static QJsonObject windowState(const MainWindow &window) {
         int thumbnails = 0;
-        for (int i = 0; i < window.library->count(); ++i)
-            thumbnails += !window.library->item(i)->icon().isNull();
+        for (int i = 0; i < window.libraryItems.size(); ++i)
+            thumbnails += !window.libraryItems.at(i)->icon(0).isNull();
         return {{"image_cache_bytes", window.renderer.cachedBytes()},
                 {"theme_json_bytes", QJsonDocument(window.theme.data).toJson(QJsonDocument::Compact).size()},
                 {"theme", window.theme.name()}, {"drafts", window.drafts.size()},
@@ -137,8 +137,59 @@ class PerformanceProbe {
         return 0;
     }
 public:
+    static int compare(const QCommandLineParser &parser) {
+        const auto theme = Theme::load(parser.value("theme"));
+        const auto fixtureSample = fixture(parser.value("snapshot"));
+        const int count = qMax(20, int(300 * parser.value("factor").toDouble()));
+        QJsonArray rows;
+        for (const auto &mode : {QString("full"), QString("incremental"), QString("unchanged"), QString("lightweight")}) {
+            Renderer renderer;
+            if (mode == "lightweight") renderer.setStaticCaching(false);
+            auto sample = fixtureSample;
+            QImage frame = renderer.render(theme, sample);
+            Timing timing;
+            const auto before = processStats();
+            for (int i = 0; i < count; ++i) {
+                if (mode != "unchanged") {
+                    sample.values["CpuLoad"] = 10. + i % 80;
+                    sample.values["RamLoad"] = 30. + i % 50;
+                    sample.values["InternetDown"] = 1024. * (i % 300);
+                    sample.values["InternetUp"] = 512. * (i % 100);
+                }
+                timing.run([&] { frame = mode == "full" ? renderer.renderFull(theme, sample) : renderer.render(theme, sample); });
+            }
+            auto row = timing.json();
+            row["mode"] = mode;
+            row["cpu_ms"] = 1000 * (processStats().cpuSeconds - before.cpuSeconds);
+            row["static_cache_bytes"] = double(renderer.staticCachedBytes());
+            rows.append(row);
+        }
+        QSet<QString> requested;
+        std::function<void(QJsonArray)> visit = [&](QJsonArray layers) {
+            for (const auto &value : layers) {
+                const auto layer = value.toObject();
+                if (!layer["visible"].toBool(true)) continue;
+                const auto kind = layer["kind"].toString();
+                if (kind == "sensor" || kind == "bar" || kind == "arc") requested.insert(canonical(layer["metric"].toString()));
+                if (kind == "group") visit(layer["children"].toArray());
+            }
+        };
+        visit(theme.layers());
+        const QSet<QString> clock{"Time"};
+        for (const auto &mode : {QString("collect_all"), QString("collect_theme"), QString("collect_clock")}) {
+            Collector collector;
+            const auto selection = mode == "collect_all" ? nullptr : mode == "collect_theme" ? &requested : &clock;
+            collector.collect({}, selection);
+            Timing timing;
+            for (int i = 0; i < 40; ++i) timing.run([&] { collector.collect({}, selection); });
+            auto row = timing.json(); row["mode"] = mode; rows.append(row);
+        }
+        write(parser.value("output"), {{"theme", theme.name()}, {"iterations", count}, {"rows", rows}});
+        return 0;
+    }
     static int run(ProbeApplication &app, const QCommandLineParser &parser) {
         const auto mode = parser.value("mode");
+        if (mode == "compare") return compare(parser);
         const auto scenario = parser.value("scenario");
         const int seconds = qMax(5, parser.value("seconds").toInt());
         const auto output = parser.value("output");
@@ -207,7 +258,6 @@ public:
             if (scenario == "editor") window->setEditing(true);
             if (scenario == "sensors") window->setPage(MainWindow::SensorsPage);
             if (scenario == "settings") window->setPage(MainWindow::SettingsPage);
-            if (scenario == "diagnostics") window->setPage(MainWindow::DiagnosticsPage);
             if (scenario == "hidden")
                 QTimer::singleShot(5000, window.get(), [&] { window->hide(); });
             if (scenario == "empty") {
@@ -235,8 +285,8 @@ public:
                             window->choose(window->entries[switches % window->entries.size()].path);
                             window->setEditing(switches % 2);
                         } else if (scenario == "scroll") {
-                            const int n = switches % window->library->count();
-                            window->library->scrollToItem(window->library->item(n), QAbstractItemView::PositionAtTop);
+                            const int n = switches % window->libraryItems.size();
+                            window->library->scrollToItem(window->libraryItems.at(n), QAbstractItemView::PositionAtTop);
                             window->thumbnails();
                         } else {
                             window->setEditing(true);

@@ -7,6 +7,7 @@
 #include <QHash>
 #include <QJsonObject>
 #include <QStringList>
+#include <QSet>
 namespace Screen {
 struct Snapshot {
     QHash<QString, double> values;
@@ -29,15 +30,25 @@ void resourceTrace(const char *stage);
 class Collector {
 public:
     explicit Collector(const QString &sysfsRoot = QStringLiteral("/sys"),
-                       const QString &procRoot = QStringLiteral("/proc"));
-    Snapshot collect(const QString &disk = {});
+                       const QString &procRoot = QStringLiteral("/proc"), QNetworkAccessManager *weatherNetwork = nullptr);
+    // nullptr requests the complete diagnostic sensor set; an empty set does no I/O.
+    Snapshot collect(const QString &disk = {}, const QSet<QString> *requested = nullptr);
     void setWeather(bool enabled, const QString &city = {});
+    bool refreshWeather();
+    WeatherStatus weatherStatus() const;
+    void applyWeather(Snapshot &sample);
+    std::function<void()> weatherChanged;
     void setAudioEnabled(bool enabled);
     void setWindowsSource(const QString &source, int port = 8085, int gpuIndex = 0);
 
 private:
     QString sysfsRoot, procRoot;
+    QNetworkAccessManager *weatherNetwork = nullptr;
     MemoryInfo memoryInfo;
+    bool memoryInfoReady = false, audioEnabled = true, networkReady = false;
+    QString cpuModel;
+    Snapshot localIp;
+    QElapsedTimer localIpAge;
     std::unique_ptr<AudioVolume> audio;
     std::unique_ptr<WeatherClient> weather;
     std::unique_ptr<WindowsHardware> windowsHardware;

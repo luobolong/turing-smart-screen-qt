@@ -16,4 +16,4 @@ import json,sys
 r=json.load(open(sys.argv[1]));print({k:v for k,v in r.items() if k!='samples'})
 if not r['passed']:raise SystemExit('100 MB target exceeded')
 PY
-"$binary" --render-theme assets/official/config/微星.data --output "$output/msi.png" --snapshot tests/fixtures/official-editor.json --editor-preview
+"$binary" --render-theme assets/themes/official/微星.data --output "$output/msi.png" --snapshot tests/fixtures/official-editor.json --editor-preview

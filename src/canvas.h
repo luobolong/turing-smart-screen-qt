@@ -14,11 +14,10 @@ public:
     void setFrame(QImage frame);
     void setFit(bool fit);
     void setZoom(double zoom);
-    double zoom() const {
-        return scale;
-    }
+    double zoom() const;
     QRectF screenRect() const;
 signals:
+    void zoomChanged(double value);
     void selectionChanged();
     void transientEdited();
     void committed(QJsonObject before);

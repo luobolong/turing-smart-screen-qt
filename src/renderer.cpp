@@ -4,6 +4,7 @@
 #include <QFontDatabase>
 #include <QImageReader>
 #include <QJsonDocument>
+#include <QRegion>
 #include <cmath>
 #include <cstring>
 #include <stdexcept>
@@ -53,8 +54,8 @@ QString monoFontFamily() {
     }();
     return family;
 }
-static void blend(QImage &out, int x, int y, QColor c) {
-    if (x < 0 || y < 0 || x >= out.width() || y >= out.height())
+static void blend(QImage &out, int x, int y, QColor c, const QRect &clip) {
+    if (!clip.contains(x, y))
         return;
     auto *p = out.scanLine(y) + x * 4;
     quint32 a = c.alpha();
@@ -79,11 +80,11 @@ static void blend(QImage &out, int x, int y, QColor c) {
     p[1] = uchar((c.green() * a + p[1] * (255 - a)) / 255);
     p[2] = uchar((c.blue() * a + p[2] * (255 - a)) / 255);
 }
-static void image(QImage &out, const QImage &source, QPoint at) {
+static void image(QImage &out, const QImage &source, QPoint at, const QRect &clip) {
     const auto src = source.format() == QImage::Format_RGBA8888
                          ? source : source.convertToFormat(QImage::Format_RGBA8888);
-    const int x0 = qMax(0, -at.x()), y0 = qMax(0, -at.y());
-    const int x1 = qMin(src.width(), out.width() - at.x()), y1 = qMin(src.height(), out.height() - at.y());
+    const int x0 = qMax(0, clip.left() - at.x()), y0 = qMax(0, clip.top() - at.y());
+    const int x1 = qMin(src.width(), clip.right() + 1 - at.x()), y1 = qMin(src.height(), clip.bottom() + 1 - at.y());
     if (x0 >= x1 || y0 >= y1) return;
     const auto *input = src.constBits();
     auto *output = out.bits();
@@ -124,6 +125,17 @@ void Renderer::clearCaches() {
     images.clear();
     glyphs.clear();
     fontFamily.clear();
+    cachedTheme = {};
+    nodes.clear();
+    nodes.squeeze();
+    base = retained = {};
+    staticPrefix = 0;
+    dirtyRect = {};
+}
+void Renderer::setStaticCaching(bool enabled) {
+    if (staticCaching == enabled) return;
+    clearCaches();
+    staticCaching = enabled;
 }
 void Renderer::loadGlyphMetrics() {
     if (!glyphs.isEmpty()) return;
@@ -152,19 +164,24 @@ QImage Renderer::decode(const QString &data) {
         images.insert(data, new QImage(img), cost);
     return img;
 }
-QImage Renderer::render(const Theme &t, const Snapshot &s, bool example) {
+QImage Renderer::background(const Theme &t) {
     QImage out(t.size(), QImage::Format_RGBA8888);
     out.fill(color(t.data["background_color"], QColor(13, 20, 29)));
     auto bg = decode(t.data["background"].toString());
     if (!bg.isNull()) {
         if (bg.size() != out.size())
             bg = bg.scaled(out.size(), Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
-        image(out, bg, {});
+        image(out, bg, {}, out.rect());
     }
     auto overlay =
         decode(t.data[t.data["use_text_background"].toBool() ? "text_background" : "overlay"].toString());
     if (!overlay.isNull())
-        image(out, overlay, {});
+        image(out, overlay, {}, out.rect());
+    return out;
+}
+QImage Renderer::renderFull(const Theme &t, const Snapshot &s, bool example) {
+    auto out = background(t);
+    paintClip = out.rect();
     layers(out, t.layers(), s, {}, example);
     return out;
 }
@@ -194,6 +211,132 @@ static QString sensorText(const QJsonObject &layer, const Snapshot &sample) {
         return "--";
     return QString::number(number, 'f', qBound(0, format["decimals"].toInt(), 6)) + suffix;
 }
+static QString paintedValue(const QJsonObject &layer, const Snapshot &sample) {
+    const auto kind = layer["kind"].toString();
+    const auto metric = layer["metric"].toString();
+    if (kind == "sensor") {
+        const bool present = sample.values.contains(canonical(metric)) || sample.strings.contains(canonical(metric));
+        return (present ? QStringLiteral("v:") : QStringLiteral("m:")) + sensorText(layer, sample);
+    }
+    if (kind == "bar") {
+        const int width = qBound(1, layer["w"].toInt(160), 1536), step = qMax(1, layer["step"].toInt(1));
+        return QString::number(int(std::round(width * sample.percentage(metric) / 100.)) / step * step);
+    }
+    return QString::number(sample.percentage(metric), 'g', 17);
+}
+void Renderer::flatten(const QJsonArray &array, QPoint offset) {
+    for (const auto &value : array) {
+        auto layer = value.toObject();
+        if (!layer["visible"].toBool(true)) continue;
+        const auto kind = layer["kind"].toString();
+        if (kind == "group") {
+            const auto children = layer.take("children").toArray();
+            if (!layer["background"].toString().isEmpty()) nodes.append({layer, offset, {}, {}, false});
+            flatten(children, offset + QPoint(layer["x"].toInt(), layer["y"].toInt()));
+        } else nodes.append({layer, offset, {}, {}, kind == "sensor" || kind == "bar" || kind == "arc"});
+    }
+}
+QRect Renderer::nodeBounds(const PaintNode &node, const Snapshot &sample, QSize size) {
+    const auto &layer = node.layer;
+    const auto at = node.offset + QPoint(layer["x"].toInt(), layer["y"].toInt());
+    const auto screen = QRect(QPoint(), size);
+    const auto kind = layer["kind"].toString();
+    if (kind == "bar")
+        return QRect(at, QSize(qBound(1, layer["w"].toInt(160), 1536), qBound(1, layer["h"].toInt(10), 1536)))
+            .adjusted(-1, -1, 1, 1).intersected(screen);
+    if (kind == "sensor" && (layer.contains("align") || layer.contains("valign") || layer.contains("baseline") ||
+        layer["fit"].toBool() || layer["shrink_to_fit"].toBool() || layer["clip"].toBool() ||
+        layer["elide"].toBool() || layer["wrap"].toBool()) && layer["w"].toInt() > 0)
+        return QRect(at, QSize(layer["w"].toInt(), qMax(1, layer["h"].toInt()))).intersected(screen);
+    const auto font = layer["font"].toObject();
+    if (kind == "sensor" && !layer["long_text"].toBool(true) && font["width"].toInt() > 0 && font["height"].toInt() > 0) {
+        const auto text = sensorText(layer, sample);
+        bool ascii = true;
+        for (auto ch : text) ascii &= ch.unicode() >= 32 && ch.unicode() < 127;
+        const auto spacing = font["spacing"].toDouble(font["width"].toInt());
+        if (ascii && spacing >= 0) {
+            const int length = qMin(1024, layer["length"].toInt() > 0 ? layer["length"].toInt() : int(text.size()));
+            return QRect(at, QSize(int(std::ceil(qMax(0, length - 1) * spacing)) + font["width"].toInt() + 1,
+                                   font["height"].toInt())).intersected(screen);
+        }
+    }
+    QImage mask(size, QImage::Format_RGBA8888);
+    mask.fill(Qt::transparent);
+    paintClip = mask.rect();
+    layers(mask, {node.layer}, sample, node.offset, false);
+    int left = size.width(), top = size.height(), right = -1, bottom = -1;
+    for (int y = 0; y < size.height(); ++y) {
+        const auto row = mask.constScanLine(y);
+        for (int x = 0; x < size.width(); ++x) {
+            if (!row[4 * x + 3]) continue;
+            left = qMin(left, x); right = qMax(right, x);
+            top = qMin(top, y); bottom = y;
+        }
+    }
+    return right < left ? QRect() : QRect(QPoint(left, top), QPoint(right, bottom));
+}
+QImage Renderer::render(const Theme &theme, const Snapshot &sample, bool example) {
+    if (!staticCaching || example) {
+        if (cachedTheme != theme.data) { clearCaches(); cachedTheme = theme.data; flatten(theme.layers()); }
+        for (auto &node : nodes) if (node.dynamic) node.value = paintedValue(node.layer, sample);
+        dirtyRect = QRect(QPoint(), theme.size());
+        return renderFull(theme, sample, example);
+    }
+    if (cachedTheme != theme.data || retained.isNull()) {
+        // A single current-theme cache: never retain another theme's images or nodes.
+        clearCaches();
+        cachedTheme = theme.data;
+        flatten(theme.layers());
+        base = background(theme);
+        paintClip = base.rect();
+        while (staticPrefix < nodes.size() && !nodes[staticPrefix].dynamic) {
+            const auto &node = nodes[staticPrefix++];
+            layers(base, {node.layer}, sample, node.offset, false);
+        }
+        retained = base;
+        for (int i = staticPrefix; i < nodes.size(); ++i) {
+            auto &node = nodes[i];
+            node.bounds = nodeBounds(node, sample, theme.size());
+            node.value = node.dynamic ? paintedValue(node.layer, sample) : QString();
+            paintClip = retained.rect();
+            layers(retained, {node.layer}, sample, node.offset, false);
+        }
+        dirtyRect = retained.rect();
+        return retained;
+    }
+    dirtyRect = {};
+    QRegion damage;
+    for (auto &node : nodes) {
+        if (!node.dynamic) continue;
+        const auto value = paintedValue(node.layer, sample);
+        if (value == node.value) continue;
+        damage += node.bounds;
+        node.bounds = nodeBounds(node, sample, theme.size());
+        damage += node.bounds;
+        node.value = value;
+    }
+    dirtyRect = damage.boundingRect();
+    if (damage.isEmpty()) return retained;
+    // Restore only damaged pixels, then replay intersecting layers in their original
+    // order. This also preserves overlapping text, transparency and shrinking values.
+    for (const auto &rect : damage) {
+        for (int y = rect.top(); y <= rect.bottom(); ++y)
+            std::memcpy(retained.scanLine(y) + rect.left() * 4,
+                        base.constScanLine(y) + rect.left() * 4, size_t(rect.width()) * 4);
+        paintClip = rect;
+        for (int i = staticPrefix; i < nodes.size(); ++i) {
+            const auto &node = nodes[i];
+            if (node.bounds.intersects(rect)) layers(retained, {node.layer}, sample, node.offset, false);
+        }
+    }
+    return retained;
+}
+bool Renderer::unchanged(const Theme &theme, const Snapshot &sample) const {
+    if (cachedTheme.isEmpty() || cachedTheme != theme.data) return false;
+    for (const auto &node : nodes)
+        if (node.dynamic && node.value != paintedValue(node.layer, sample)) return false;
+    return true;
+}
 void Renderer::layers(QImage &out, const QJsonArray &a, const Snapshot &s, QPoint offset, bool example) {
     for (auto v : a) {
         auto l = v.toObject();
@@ -204,7 +347,7 @@ void Renderer::layers(QImage &out, const QJsonArray &a, const Snapshot &s, QPoin
         if (kind == "group") {
             auto bg = decode(l["background"].toString());
             if (!bg.isNull())
-                image(out, bg, at);
+                image(out, bg, at, paintClip);
             layers(out, l["children"].toArray(), s, at, example);
         } else if (kind == "bar")
             bar(out, l, at, s, example);
@@ -255,10 +398,11 @@ void Renderer::layers(QImage &out, const QJsonArray &a, const Snapshot &s, QPoin
                             p[4 * x + 3] = uchar(p[4 * x + 3] * opacity / 255);
                     }
                 }
-                image(out, img, at);
+                image(out, img, at, paintClip);
             }
         } else {
             QPainter p(&out);
+            p.setClipRect(paintClip);
             p.setRenderHint(QPainter::Antialiasing);
             p.setBrush(color(l["fill"], QColor("#28c9bf")));
             int sw = l["stroke_width"].toInt(1);
@@ -316,7 +460,7 @@ void Renderer::text(QImage &out, const QString &str, QPoint at, const QJsonObjec
                         if (a) {
                             auto c = tint;
                             c.setAlpha(a * tint.alpha() / 255);
-                            blend(out, int(std::round(cursor)) + tx, at.y() + ty, c);
+                            blend(out, int(std::round(cursor)) + tx, at.y() + ty, c, paintClip);
                         }
                     }
                 cursor += fixed ? f["spacing"].toDouble(w) : advances[index].toDouble();
@@ -333,6 +477,7 @@ void Renderer::text(QImage &out, const QString &str, QPoint at, const QJsonObjec
     if (fontFamily.isEmpty())
         fontFamily = screenFontFamily();
     QPainter p(&out);
+    p.setClipRect(paintClip);
     p.setPen(tint);
     const bool symbols = f["family"] == "Turing Screen Symbols";
     QFont font(symbols ? symbolFontFamily()
@@ -373,7 +518,7 @@ void Renderer::text(QImage &out, const QString &str, QPoint at, const QJsonObjec
     double baseline = at.y() + (explicitBaseline ? f["_baseline"].toDouble() : lineMetrics.ascent());
     if (boxWidth > 0) {
         const int boxHeight = qMax(1, f["_box_height"].toInt());
-        p.setClipRect(QRect(at, QSize(boxWidth, boxHeight)));
+        p.setClipRect(QRect(at, QSize(boxWidth, boxHeight)), Qt::IntersectClip);
         if (f["_fit"].toBool() && !display.isEmpty()) {
             // Nerd Font glyphs can extend beyond the font's ascent and advance.
             // Place the complete visible glyph inside its box before clipping.
@@ -434,6 +579,7 @@ void Renderer::bar(QImage &out, const QJsonObject &l, QPoint at, const Snapshot 
         step = qMax(1, l["step"].toInt(1));
     if (example) {
         QPainter p(&out);
+        p.setClipRect(paintClip);
         p.fillRect(QRect(at, QSize(w, 13)), Qt::blue);
         return;
     }
@@ -441,6 +587,7 @@ void Renderer::bar(QImage &out, const QJsonObject &l, QPoint at, const Snapshot 
     auto front = bytes(l, "front_pixels"), back = bytes(l, "back_pixels");
     if (front.isEmpty() && back.isEmpty() && l["corner_radius"].toDouble() > 0) {
         QPainter painter(&out);
+        painter.setClipRect(paintClip);
         painter.setRenderHint(QPainter::Antialiasing);
         painter.setPen(Qt::NoPen);
         const double radius = qMin(l["corner_radius"].toDouble(), h / 2.);
@@ -457,7 +604,7 @@ void Renderer::bar(QImage &out, const QJsonObject &l, QPoint at, const Snapshot 
             int col = back.size() == h * 2 ? 0 : x;
             auto c = x < fill ? rgb565(front, (y * step + x % step) * 2, color(l["front"], QColor("#28c9bf")))
                               : rgb565(back, (col * h + y) * 2, color(l["back"], QColor("#253041")));
-            blend(out, at.x() + x, at.y() + y, c);
+            blend(out, at.x() + x, at.y() + y, c, paintClip);
         }
 }
 void Renderer::arc(QImage &out, const QJsonObject &l, QPoint at, const Snapshot &s, bool example) {
@@ -470,7 +617,7 @@ void Renderer::arc(QImage &out, const QJsonObject &l, QPoint at, const Snapshot 
             int end = qMin(offset + quint8(counts[n]), int(points.size()));
             for (int i = offset; i + 1 < end; i += 2)
                 blend(out, at.x() + quint8(points[i]), at.y() + quint8(points[i + 1]),
-                      n < per ? front : back);
+                      n < per ? front : back, paintClip);
             offset = end;
         }
         return;
@@ -487,7 +634,7 @@ void Renderer::arc(QImage &out, const QJsonObject &l, QPoint at, const Snapshot 
             double fraction = std::fmod(angle - start + 2., 1.);
             if (l["segmented"].toBool() && std::fmod(fraction * 100, 1.) > .65)
                 continue;
-            blend(out, at.x() + x, at.y() + y, fraction * 100 < per ? front : back);
+            blend(out, at.x() + x, at.y() + y, fraction * 100 < per ? front : back, paintClip);
         }
 }
 } // namespace Screen

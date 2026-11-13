@@ -1,19 +1,28 @@
 #include "mainwindow.h"
 #include "application.h"
+#include "uiappearance.h"
 #include "pseudoscreen.h"
+#include "weathernetwork.h"
 #include <QJsonDocument>
 #include <QMouseEvent>
 #include <QScopeGuard>
 #include <QtTest>
 #include <QtWidgets>
 #include <algorithm>
+#include <cmath>
 #include <stdexcept>
 namespace Screen {
 class TestProfile : public QTemporaryDir {
 public:
     TestProfile() {
         QFile config(path() + "/config.json");
-        const QByteArray offline = "{\"weather_enabled\":false}";
+        const auto root = path() + "/themes";
+        QDir().mkpath(root + "/custom"); QDir().mkpath(root + "/official"); QDir().mkpath(root + "/deleted");
+        QFile::copy(assets() + "/themes/custom/nightfall.json", root + "/custom/nightfall.json");
+        QFile::copy(assets() + "/themes/custom/system overview.json", root + "/custom/system overview.json");
+        QFile::copy(assets() + "/themes/official/微星.data", root + "/official/微星.data");
+        const auto offline = QJsonDocument(QJsonObject{{"weather_enabled", false}, {"theme_library_root", root},
+            {"theme_library_seeded", true}, {"theme_library_version", 1}}).toJson();
         if (!config.open(QIODevice::WriteOnly) || config.write(offline) != offline.size())
             throw std::runtime_error("Cannot create offline test profile");
     }
@@ -49,6 +58,239 @@ static void dragCanvas(Canvas &canvas, QPointF from, QPointF to,
 class GuiTest : public QObject {
     Q_OBJECT
 private slots:
+    void narrowDevicePanelKeepsControlsInsideViewport() {
+        TestProfile dir;
+        MainWindow window(dir.path());
+        window.show(); window.sampling.stop();
+        window.hide(); window.show();
+        const auto shots = qEnvironmentVariable("TURING_WEATHER_UI_SHOTS");
+        if (!shots.isEmpty()) window.selectUiTheme("catppuccin-macchiato");
+        auto scroll = window.findChild<QScrollArea *>("deviceScroll");
+        QVERIFY(scroll);
+        auto font = window.font();
+        for (int size : {9, 12}) {
+            font.setPointSize(size); window.setFont(font);
+            for (int width : {200, 220, 260}) {
+                window.devicePanel->setFixedWidth(width);
+                QCoreApplication::processEvents();
+                QTest::qWait(20);
+                QVERIFY(scroll->widget()->width() <= scroll->viewport()->width());
+                QCOMPARE(scroll->horizontalScrollBar()->maximum(), 0);
+                for (QWidget *widget : QList<QWidget *>{window.portBox, window.directionBox,
+                        window.brightness, window.connectButton, window.sendButton,
+                        window.findChild<QToolButton *>("refreshDevicePorts")}) {
+                    const auto left = widget->mapTo(scroll->viewport(), QPoint()).x();
+                    QVERIFY2(left >= 0 && left + widget->width() <= scroll->viewport()->width(), qPrintable(widget->objectName()));
+                }
+                if (!shots.isEmpty() && size == 9 && width == 220) {
+                    QDir().mkpath(shots);
+                    QVERIFY(window.grab().save(shots + "/device-narrow.png"));
+                }
+            }
+        }
+        window.quitting = true;
+    }
+    void manualWeatherSettingsShowsErrorsSuccessAndRespectsCollectionPause() {
+        TestProfile dir;
+        WeatherNetwork network;
+        auto runtime = std::make_shared<DisplayRuntime>(dir.path(), QString(), &network);
+        MainWindow window(runtime);
+        window.show(); window.hide(); window.show();
+        window.sampling.stop(); window.setPage(MainWindow::SettingsPage);
+        auto enabled = window.findChild<QCheckBox *>("weatherEnabled");
+        auto city = window.findChild<QLineEdit *>("weatherCity");
+        auto fetch = window.findChild<QPushButton *>("fetchWeatherNow");
+        auto status = window.findChild<QLabel *>("weatherStatus");
+        QVERIFY(enabled && city && fetch && status);
+        QVERIFY(!fetch->isEnabled());
+        enabled->setChecked(true);
+        city->setText("Test City");
+        QVERIFY(QMetaObject::invokeMethod(city, "editingFinished"));
+        QVERIFY(network.requests.isEmpty()); // Opening settings does not poll the weather.
+        QVERIFY(fetch->isEnabled());
+        const auto timestamp = window.sample.timestamp;
+        network.responses = {"network-timeout"};
+        fetch->click();
+        QVERIFY(!fetch->isEnabled());
+        QTRY_COMPARE(status->property("statusTone").toString(), QString("error"));
+        QVERIFY(fetch->isEnabled());
+        QVERIFY(status->accessibleName().contains("timed out"));
+        const auto shots = qEnvironmentVariable("TURING_WEATHER_UI_SHOTS");
+        const auto capture = [&](const QString &name) {
+            if (shots.isEmpty()) return;
+            window.selectUiTheme("catppuccin-macchiato");
+            for (auto parent = fetch->parentWidget(); parent; parent = parent->parentWidget())
+                if (auto scroll = qobject_cast<QScrollArea *>(parent)) { scroll->ensureWidgetVisible(fetch); break; }
+            QCoreApplication::processEvents();
+            QDir().mkpath(shots); QVERIFY(window.grab().save(shots + '/' + name + ".png"));
+        };
+        capture("weather-error");
+        network.responses = {R"({"results":[{"name":"Test City","latitude":25,"longitude":121}]})",
+                             R"({"current":{"temperature_2m":23.5,"weather_code":61}})"};
+        fetch->click();
+        QTRY_COMPARE(status->property("statusTone").toString(), QString("success"));
+        QVERIFY(status->accessibleName().contains("23.5"));
+        QCOMPARE(window.sample.values.value("WeatherTemp"), 23.5);
+        QCOMPARE(window.sample.timestamp, timestamp); // No unrelated sensor collection.
+        QCOMPARE(network.requests.size(), 3);
+        capture("weather-success");
+        runtime->setCollectionEnabled(false);
+        QVERIFY(!fetch->isEnabled());
+        const auto requests = network.requests.size();
+        QVERIFY(!runtime->requestWeather());
+        QCOMPARE(network.requests.size(), requests);
+        QVERIFY(status->accessibleName().contains("暂停") || status->accessibleName().contains("paused"));
+        runtime->setCollectionEnabled(true);
+        network.responses = {R"({"results":[{"name":"Cancelled","latitude":25,"longitude":121}]})"};
+        fetch->click(); enabled->setChecked(false);
+        QCoreApplication::processEvents();
+        QVERIFY(!runtime->collector.weatherStatus().enabled);
+        QVERIFY(!fetch->isEnabled());
+        QCOMPARE(network.requests.size(), requests + 1); // Canceled geocoding cannot start a forecast.
+        window.quitting = true;
+    }
+    void zoomDeviceAndThemeControlsFollowPreviewAndEditorLayout() {
+        TestProfile dir;
+        MainWindow window(dir.path());
+        window.show();
+        window.sampling.stop();
+        QTest::qWait(80);
+        // A hidden process launch can consume Windows' first ShowWindow call.
+        window.hide(); window.show(); window.activateWindow();
+        QTest::qWait(80);
+        for (const auto &prefix : {QString("preview"), QString("editor")}) {
+            window.setPage(prefix == "preview" ? MainWindow::LibraryPage : MainWindow::EditorPage);
+            QCoreApplication::processEvents();
+            auto target = prefix == "preview" ? window.previewCanvas : window.canvas;
+            auto controls = window.findChild<QWidget *>(prefix + "ZoomControls");
+            auto slider = controls->findChild<QSlider *>(prefix + "ZoomSlider");
+            auto value = controls->findChild<QDoubleSpinBox *>(prefix + "ZoomValue");
+            auto minus = controls->findChild<QToolButton *>(prefix + "ZoomOut");
+            auto plus = controls->findChild<QToolButton *>(prefix + "ZoomIn");
+            QVERIFY(controls && slider && value && minus && plus);
+            slider->setValue(150);
+            QCOMPARE(target->zoom(), 1.5); QCOMPARE(value->value(), 150.);
+            value->setValue(123.45);
+            QCOMPARE(value->suffix(), QString("%"));
+            QVERIFY(std::abs(target->zoom() - 1.2345) < .00001);
+            plus->click(); QVERIFY(target->zoom() > 1.2345);
+            QVERIFY(std::abs(value->value() - target->zoom() * 100.) < .006);
+            minus->click(); QVERIFY(std::abs(target->zoom() - 1.2345) < .00001);
+            controls->findChild<QToolButton *>(prefix + "Fit")->click();
+            QVERIFY(std::abs(value->value() - target->zoom() * 100.) < .006);
+            controls->findChild<QToolButton *>(prefix + "ActualSize")->click();
+            QCOMPARE(value->value(), 100.);
+            QCoreApplication::processEvents();
+            QVERIFY(minus->geometry().left() > value->geometry().right());
+            QVERIFY(plus->geometry().left() > minus->geometry().right());
+            QVERIFY(controls->mapTo(&window, QPoint()).y() >= target->mapTo(&window, target->rect().bottomLeft()).y());
+        }
+        window.setPage(MainWindow::LibraryPage);
+        auto refresh = window.findChild<QToolButton *>("refreshDevicePorts");
+        QVERIFY(refresh && !refresh->icon().isNull() && refresh->text().isEmpty());
+        QVERIFY(refresh->mapTo(&window, QPoint()).x() > window.portBox->mapTo(&window, window.portBox->rect().topRight()).x());
+        QVERIFY(window.connectButton->mapTo(&window, QPoint()).y() < window.sendButton->mapTo(&window, QPoint()).y());
+        auto menu = window.findChild<QMenu *>("themeOptionsMenu");
+        auto types = window.findChild<QMenu *>("themeTypeMenu");
+        QVERIFY(menu && types);
+        QCOMPARE(types->actions().size(), 2);
+        for (auto action : menu->actions()) {
+            QVERIFY(!action->text().contains("text background", Qt::CaseInsensitive));
+            QVERIFY(!action->text().contains("回收站"));
+            QVERIFY(!action->text().contains("recycle", Qt::CaseInsensitive));
+        }
+        QVERIFY(QMetaObject::invokeMethod(types, "aboutToShow"));
+        QCOMPARE(types->actions()[0]->isChecked(), window.theme.data["landscape"].toBool(true));
+        types->actions()[1]->trigger();
+        QVERIFY(!window.theme.data["landscape"].toBool(true));
+        QVERIFY(QMetaObject::invokeMethod(types, "aboutToShow"));
+        QVERIFY(types->actions()[1]->isChecked() && !types->actions()[0]->isChecked());
+        QCOMPARE(window.directionBox->style()->styleHint(QStyle::SH_ComboBox_Popup, nullptr, window.directionBox), 0);
+        window.activateWindow();
+        QTest::qWait(80);
+        window.directionBox->showPopup();
+        QCoreApplication::processEvents();
+        QTRY_VERIFY_WITH_TIMEOUT(window.directionBox->view()->isVisible(), 1000);
+        const auto bottom = window.directionBox->mapToGlobal(window.directionBox->rect().bottomLeft()).y();
+        QVERIFY(window.directionBox->view()->window()->geometry().top() >= bottom);
+        window.directionBox->hidePopup();
+        const auto shots = qEnvironmentVariable("TURING_CPU_UI_SHOTS");
+        if (!shots.isEmpty()) {
+            QDir().mkpath(shots);
+            window.selectUiTheme("catppuccin-macchiato");
+            types->actions()[0]->trigger();
+            window.tick();
+            window.findChild<QToolButton *>("previewFit")->click();
+            QCoreApplication::processEvents();
+            QVERIFY(window.grab().save(shots + "/preview.png"));
+            window.setPage(MainWindow::EditorPage);
+            window.findChild<QToolButton *>("editorFit")->click();
+            QCoreApplication::processEvents();
+            QVERIFY(window.grab().save(shots + "/editor.png"));
+            window.setPage(MainWindow::SettingsPage);
+            QVERIFY(window.grab().save(shots + "/settings.png"));
+        }
+        window.dirty = false; window.quitting = true;
+    }
+    void collectionToggleSyncsPersistsAndReleasesLightweightCaches() {
+        TestProfile dir;
+        {
+            ApplicationController app(dir.path(), {}, [] { return true; });
+            auto &runtime = app.display();
+            auto settings = app.window()->findChild<QCheckBox *>("collectData");
+            auto device = app.window()->findChild<QCheckBox *>("deviceCollectData");
+            QVERIFY(settings && device && app.collectAction);
+            QVERIFY(settings->isChecked() && device->isChecked() && app.collectAction->isChecked());
+            QVERIFY(app.menu->actions().indexOf(app.collectAction) < app.menu->actions().indexOf(app.portsMenu->menuAction()));
+            QVERIFY(runtime.sampling.isActive());
+            QVERIFY(runtime.renderer.staticCachedBytes() > 0);
+            const auto sample = runtime.sample.json();
+            const auto frame = runtime.frame;
+            settings->setChecked(false);
+            QVERIFY(!runtime.sampling.isActive());
+            QVERIFY(!app.collectAction->isChecked() && !device->isChecked());
+            runtime.tick();
+            QTest::qWait(1100);
+            QCOMPARE(runtime.sample.json(), sample);
+            QCOMPARE(runtime.frame, frame);
+            QVERIFY(app.enterLightweight());
+            QCOMPARE(runtime.renderer.staticCachedBytes(), 0);
+            runtime.render();
+            QCOMPARE(runtime.renderer.staticCachedBytes(), 0);
+            app.showWindow();
+            QVERIFY(!app.window()->findChild<QCheckBox *>("collectData")->isChecked());
+            QVERIFY(!runtime.sampling.isActive());
+            app.collectAction->trigger();
+            QVERIFY(runtime.sampling.isActive());
+            QVERIFY(app.window()->findChild<QCheckBox *>("collectData")->isChecked());
+            QVERIFY(runtime.sample.json() != sample);
+            app.collectAction->trigger();
+        }
+        ApplicationController reopened(dir.path(), {}, [] { return true; });
+        QVERIFY(!reopened.display().collectionEnabled());
+        QVERIFY(!reopened.display().sampling.isActive());
+        QVERIFY(reopened.display().sample.values.isEmpty());
+        QVERIFY(!reopened.collectAction->isChecked());
+    }
+    void runtimeRequestsVisibleThemeBindingsAndDiagnosticsOnlyOnSensorPage() {
+        TestProfile dir;
+        MainWindow window(dir.path());
+        auto hidden = component("GPU"); hidden["visible"] = false;
+        auto fixed = newLayer("text", "Fixed", "Volume"); fixed["text"] = "Static";
+        auto sensor = newLayer("sensor", "Clock", "Time");
+        window.theme.data["layers"] = QJsonArray{hidden, fixed, sensor};
+        QCOMPARE(window.runtime->requestedMetrics(), QSet<QString>{"Time"});
+        window.tick();
+        QCOMPARE(window.sample.strings.keys(), QStringList{"Time"});
+        QVERIFY(window.sample.values.isEmpty());
+        window.show();
+        window.setPage(MainWindow::SensorsPage);
+        QVERIFY(window.runtime->requestedMetrics().contains("RamLoad"));
+        QVERIFY(window.sample.values.contains("RamLoad"));
+        window.hide();
+        QCOMPARE(window.runtime->requestedMetrics(), QSet<QString>{"Time"});
+        window.quitting = true;
+    }
 #ifdef Q_OS_WIN
     void windowsSensorSourcePersistsAndAppliesImmediately() {
         TestProfile dir;
@@ -97,23 +339,30 @@ private slots:
         QVERIFY(!w.editing);
         QVERIFY(!w.sidebarExpanded);
         QCOMPARE(w.sidebar->width(), 60);
-        QCOMPARE(w.titleBar->width(), w.root->width());
-        QVERIFY(w.titleBar->mapTo(w.root, QPoint()).y() < w.sidebar->mapTo(w.root, QPoint()).y());
-        QVERIFY(w.titleBar->isAncestorOf(w.sidebarToggle));
+        QVERIFY(w.titleBar->width() < w.root->width());
+        QCOMPARE(w.sidebar->mapTo(w.root, QPoint()).y(), 0);
+        QVERIFY(w.sidebar->isAncestorOf(w.sidebarToggle));
+        QVERIFY(!w.sidebarToggle->icon().isNull());
+        QVERIFY(w.sidebarToggle->text().isEmpty());
+        QVERIFY(w.sidebarToggle->mapTo(w.sidebar, QPoint()).y() > w.findChild<QToolButton *>("sidebarLightweight")->mapTo(w.sidebar, QPoint()).y());
+        QCOMPARE(w.sidebarBrand->objectName(), QString("sidebarBrand"));
         QVERIFY(!w.saveButton->isVisible());
         QVERIFY(!w.findChild<QLabel *>("applicationTitle"));
         QVERIFY(!w.findChild<QToolButton *>("sidebarNew"));
-        QCOMPARE(w.navigation->count(), 5);
-        QCOMPARE(w.library->viewMode(), QListView::ListMode);
-        QVERIFY(!w.library->isWrapping());
+        QCOMPARE(w.navigation->count(), 4);
+        QCOMPARE(w.library->columnCount(), 1);
+        QVERIFY(w.library->isHeaderHidden());
         QCOMPARE(w.librarySplit->count(), 3);
         QVERIFY(w.devicePanel->isVisible());
         QVERIFY(w.devicePanel->isAncestorOf(w.portBox));
         QVERIFY(w.devicePanel->isAncestorOf(w.sendButton));
         QVERIFY(w.portBox->isVisible());
         QVERIFY(w.devicePanel->mapTo(&w, QPoint()).x() > w.previewCanvas->mapTo(&w, QPoint()).x());
-        const auto firstRow = w.library->visualItemRect(w.library->item(0));
-        const auto secondRow = w.library->visualItemRect(w.library->item(1));
+        auto custom = w.library->topLevelItem(1);
+        QCOMPARE(custom->text(0), QString("custom"));
+        custom->setExpanded(true);
+        const auto firstRow = w.library->visualItemRect(custom->child(0));
+        const auto secondRow = w.library->visualItemRect(custom->child(1));
         QCOMPARE(firstRow.left(), secondRow.left());
         QVERIFY(secondRow.top() > firstRow.bottom());
         w.mirrorBox->setChecked(true);
@@ -121,7 +370,7 @@ private slots:
         QVERIFY(w.canvas->mirrored);
         w.mirrorBox->setChecked(false);
         QCOMPARE(w.navigation->currentRow(), int(MainWindow::LibraryPage));
-        w.choose(assets() + "/themes/nightfall.json");
+        w.choose(dir.path() + "/themes/custom/nightfall.json");
         const auto original = w.theme.data;
         w.modeButton->click();
         QTRY_VERIFY(w.canvas->isVisible());
@@ -174,6 +423,83 @@ private slots:
         QVERIFY(w.sidebarExpanded);
         w.quitting = true;
     }
+    void sidebarIconsStayAlignedAndPageHeadersHaveEqualHeight() {
+        TestProfile dir;
+        MainWindow w(dir.path());
+        w.sampling.stop();
+        w.selectUiTheme("catppuccin-mocha");
+        w.show();
+        for (bool english : {false, true}) {
+            w.english = english;
+            w.build();
+            for (int width : {1280, 760}) {
+                w.resize(width, 820);
+                w.setSidebarExpanded(false);
+                w.setPage(MainWindow::LibraryPage);
+                QCoreApplication::processEvents();
+                auto light = w.findChild<QToolButton *>("sidebarLightweight");
+                QCOMPARE(w.sidebarBrand->height(), 64);
+                QCOMPARE(light->height(), 44);
+                QCOMPARE(w.sidebarToggle->height(), 36);
+                const auto iconImages = [&] {
+                    QList<QImage> images;
+                    for (auto b : {w.sidebarBrand, light}) {
+                        const auto y = b->mapTo(w.sidebar, QPoint(0, b->height() / 2)).y();
+                        images.append(w.sidebar->grab(QRect(14, y - 16, 32, 32)).toImage());
+                    }
+                    for (int n = 0; n < w.navigation->count(); ++n) {
+                        const auto row = w.navigation->visualItemRect(w.navigation->item(n));
+                        const auto y = w.navigation->viewport()->mapTo(w.sidebar, row.center()).y();
+                        images.append(w.sidebar->grab(QRect(19, y - 11, 22, 22)).toImage());
+                    }
+                    return images;
+                };
+                const auto collapsed = iconImages();
+                const auto logoPosition = w.sidebarBrand->mapTo(w.sidebar, QPoint());
+                const auto togglePosition = w.sidebarToggle->mapTo(w.sidebar, QPoint());
+                const auto expandIcon = w.sidebarToggle->icon().pixmap(22, 22).toImage();
+                w.sidebarBrand->click();
+                QTRY_VERIFY(w.sidebarExpanded);
+                QCoreApplication::processEvents();
+                QCOMPARE(w.sidebar->width(), 208);
+                QCOMPARE(iconImages(), collapsed);
+                QCOMPARE(w.sidebarBrand->mapTo(w.sidebar, QPoint()), logoPosition);
+                QCOMPARE(w.sidebarToggle->mapTo(w.sidebar, QPoint()), togglePosition);
+                QVERIFY(w.sidebarToggle->text().isEmpty());
+                QVERIFY(w.sidebarToggle->icon().pixmap(22, 22).toImage() != expandIcon);
+                w.sidebarToggle->click();
+                QTRY_VERIFY(!w.sidebarExpanded);
+                QCoreApplication::processEvents();
+                QCOMPARE(iconImages(), collapsed);
+                int titleCenter = -1;
+                for (int page = 0; page < MainWindow::PageCount; ++page) {
+                    w.setPage(page);
+                    QCoreApplication::processEvents();
+                    QCOMPARE(w.titleBar->height(), 64);
+                    const auto center = w.pageTitle->mapTo(w.titleBar, w.pageTitle->rect().center()).y();
+                    if (titleCenter < 0) titleCenter = center;
+                    QCOMPARE(center, titleCenter);
+                    QCOMPARE(w.titleBar->y(), 0);
+                    const auto shots = qEnvironmentVariable("TURING_PANEL_SHOTS");
+                    if (!shots.isEmpty() && width == 1280) {
+                        QDir().mkpath(shots);
+                        const auto name = QString("/sidebar-%1-page-%2").arg(english ? "en" : "zh").arg(page);
+                        QVERIFY(w.grab().save(shots + name + "-collapsed.png"));
+                        w.sidebarBrand->click();
+                        QCoreApplication::processEvents();
+                        QVERIFY(w.grab().save(shots + name + "-expanded.png"));
+                        w.sidebarToggle->click();
+                        QCoreApplication::processEvents();
+                    }
+                }
+                QCOMPARE(w.findChild<QToolButton *>("libraryExpandSelected")->toolTip(),
+                         english ? QString("Expand selected folder") : QString::fromUtf8("展开所选文件夹"));
+                QCOMPARE(w.findChild<QToolButton *>("libraryImport")->toolTip(),
+                         english ? QString("Import theme") : QString::fromUtf8("导入主题"));
+            }
+        }
+        w.quitting = true;
+    }
     void compactLayoutReflowsAndSidebarRemainsUsable() {
         TestProfile dir;
         MainWindow w(dir.path());
@@ -182,18 +508,20 @@ private slots:
         w.show();
         QTRY_COMPARE(w.librarySplit->orientation(), Qt::Horizontal);
         QVERIFY(w.sidebarExpanded);
-        w.setPage(MainWindow::DiagnosticsPage);
+        w.setPage(MainWindow::SettingsPage);
         w.resize(760, 680);
         QTRY_COMPARE(w.size(), QSize(760, 680));
         w.setPage(MainWindow::LibraryPage);
         QTRY_COMPARE(w.librarySplit->orientation(), Qt::Vertical);
-        QTRY_VERIFY(w.library->isWrapping());
-        QCOMPARE(w.library->flow(), QListView::LeftToRight);
-        const auto rowRect = [&w](int n) { return w.library->visualItemRect(w.library->item(n)); };
-        QTRY_COMPARE(rowRect(0).top(), rowRect(1).top());
-        QVERIFY(rowRect(1).left() > rowRect(0).left());
-        QTRY_VERIFY(rowRect(2).top() > rowRect(0).bottom());
-        QCOMPARE(rowRect(2).left(), rowRect(0).left());
+        QCOMPARE(w.library->columnCount(), 1);
+        auto custom = w.library->topLevelItem(1);
+        custom->setExpanded(true);
+        QCoreApplication::processEvents();
+        const auto first = w.library->visualItemRect(custom->child(0));
+        const auto second = w.library->visualItemRect(custom->child(1));
+        QCOMPARE(first.left(), second.left());
+        QVERIFY(second.top() > first.bottom());
+        for (int n = 0; n < w.library->topLevelItemCount(); ++n) QVERIFY(w.library->topLevelItem(n)->text(0) != "themes");
         auto separator = w.librarySplit->handle(1)->findChild<QFrame *>("paneSeparator");
         QVERIFY(separator && separator->isVisible());
         QCOMPARE(separator->frameShape(), QFrame::HLine);
@@ -226,14 +554,13 @@ private slots:
         w.resize(1280, 820);
         w.setPage(MainWindow::LibraryPage);
         QTRY_COMPARE(w.librarySplit->orientation(), Qt::Horizontal);
-        QVERIFY(!w.library->isWrapping());
-        QCOMPARE(w.library->flow(), QListView::TopToBottom);
+        QCOMPARE(w.library->columnCount(), 1);
         QTRY_COMPARE(separator->frameShape(), QFrame::VLine);
         w.setEditing(true);
         QTRY_COMPARE(w.editorSplit->orientation(), Qt::Horizontal);
         w.setSidebarExpanded(true);
         w.resize(1020, 760);
-        QTRY_COMPARE(w.editorSplit->orientation(), Qt::Vertical);
+        QTRY_COMPARE(w.editorSplit->orientation(), Qt::Horizontal);
         w.sidebarToggle->click();
         QVERIFY(!w.sidebarExpanded);
         QTRY_COMPARE(w.editorSplit->orientation(), Qt::Horizontal);
@@ -261,7 +588,7 @@ private slots:
     }
     void autostartSkipsEditorAndRestoresFromTray() {
         TestProfile dir;
-        const auto themePath = assets() + "/themes/nightfall.json";
+        const auto themePath = dir.path() + "/themes/custom/nightfall.json";
         {
             QFile config(dir.path() + "/config.json");
             QVERIFY(config.open(QIODevice::WriteOnly));
@@ -304,7 +631,7 @@ private slots:
 #ifndef Q_OS_WIN
         TestProfile dir;
         PseudoScreen screen;
-        const auto themePath = assets() + "/themes/nightfall.json";
+        const auto themePath = dir.path() + "/themes/custom/nightfall.json";
         {
             QFile config(dir.path() + "/config.json");
             QVERIFY(config.open(QIODevice::WriteOnly));
@@ -446,14 +773,15 @@ private slots:
         app.showWindow();
         auto w = app.window();
         w->sampling.stop();
+        const auto defaultPath = w->path;
         w->addComponent("CPU");
-        w->choose(assets() + "/themes/nightfall.json");
+        w->choose(dir.path() + "/themes/custom/nightfall.json");
         w->setEditing(true);
         w->addComponent("RAM");
         const auto current = w->theme.data, saved = w->saved;
         const auto undo = w->undoHistory;
         const auto selected = w->selection();
-        const auto draft = w->drafts.value("__starter__").theme.data;
+        const auto draft = w->drafts.value(defaultPath).theme.data;
         QPointer<MainWindow> old = w;
         QPointer<Canvas> oldCanvas = w->canvas;
         auto *runtime = &app.display();
@@ -476,7 +804,7 @@ private slots:
             QCOMPARE(w->saved, saved);
             QCOMPARE(w->undoHistory, undo);
             QCOMPARE(w->selection(), selected);
-            QCOMPARE(w->drafts.value("__starter__").theme.data, draft);
+            QCOMPARE(w->drafts.value(defaultPath).theme.data, draft);
             QVERIFY(w->dirty);
             QVERIFY(w->editing);
             QVERIFY(!app.suspended);
@@ -612,7 +940,7 @@ private slots:
 #else
         TestProfile dir;
         PseudoScreen screen;
-        ApplicationController app(dir.path(), assets() + "/themes/nightfall.json", [] { return true; });
+        ApplicationController app(dir.path(), dir.path() + "/themes/custom/nightfall.json", [] { return true; });
         app.showWindow();
         auto &runtime = app.display();
         runtime.device.connectPort(screen.port, runtime.theme.orientation(), 75, false);
@@ -653,8 +981,16 @@ private slots:
         QByteArray original;
         {
             MainWindow w(dir.path());
+            QTimer errorDialogs;
+            connect(&errorDialogs, &QTimer::timeout, &w, [&] {
+                auto dialog = qobject_cast<QMessageBox *>(QApplication::activeModalWidget());
+                if (dialog && dialog->objectName() != "deleteThemeConfirmation") {
+                    qWarning() << dialog->windowTitle() << dialog->text(); dialog->reject();
+                }
+            });
+            errorDialogs.start(100);
             w.show();
-            QVERIFY(!w.deleteThemeButton->isEnabled());
+            QVERIFY(w.deleteThemeAction->isEnabled());
             w.newTheme();
             removed = w.path;
             const auto directionKey = w.orientationKey();
@@ -674,7 +1010,7 @@ private slots:
                 unsavedSeen = dialog->text().contains("unsaved") || dialog->text().contains(QStringLiteral("未保存"));
                 QTest::keyClick(dialog, Qt::Key_Escape);
             });
-            QTest::mouseClick(w.deleteThemeButton, Qt::LeftButton);
+            w.deleteTheme(w.path);
             QVERIFY(cancellationSeen);
             QVERIFY(unsavedSeen);
             QCOMPARE(w.theme.data, edited);
@@ -692,30 +1028,30 @@ private slots:
                     }
                 dialog->reject();
             });
-            QTest::mouseClick(w.deleteThemeButton, Qt::LeftButton);
+            w.deleteTheme(w.path);
             QVERIFY(deletionSeen);
             QVERIFY(!QFileInfo::exists(removed));
-            QVERIFY(w.path.isEmpty());
+            QCOMPARE(w.path, w.runtime->library.defaultThemeFile());
             QVERIFY(!w.dirty);
             QVERIFY(!w.sending);
             QVERIFY(w.undoHistory.isEmpty());
             QVERIFY(!w.drafts.contains(removed));
             QVERIFY(!w.config["theme_orientations"].toObject().contains(directionKey));
-            QVERIFY(!w.deleteThemeButton->isEnabled());
-            const auto backups = QDir(dir.path() + "/deleted-themes").entryList({"*.json"}, QDir::Files);
+            QVERIFY(w.deleteThemeAction->isEnabled());
+            const auto backups = QDir(dir.path() + "/themes/deleted").entryList({"*.json"}, QDir::Files);
             QCOMPARE(backups.size(), 1);
-            QFile backup(dir.path() + "/deleted-themes/" + backups.first());
+            QFile backup(dir.path() + "/themes/deleted/" + backups.first());
             QVERIFY(backup.open(QIODevice::ReadOnly));
             QCOMPARE(backup.readAll(), original);
             w.undo();
-            QVERIFY(w.path.isEmpty());
+            QCOMPARE(w.path, w.runtime->library.defaultThemeFile());
             QVERIFY(!QFileInfo::exists(removed));
             w.quitting = true;
         }
         MainWindow reopened(dir.path());
         QVERIFY(std::none_of(reopened.entries.begin(), reopened.entries.end(),
                              [&](const MainWindow::Entry &e) { return e.path == removed; }));
-        QVERIFY(reopened.path.isEmpty());
+        QCOMPARE(reopened.path, reopened.runtime->library.defaultThemeFile());
         reopened.quitting = true;
     }
     void deleteInactiveThemePreservesCurrentAndFilter() {
@@ -729,41 +1065,35 @@ private slots:
         const auto before = w.theme.data;
         QVERIFY(w.drafts.contains(removed));
         w.search->setText("no matching theme name");
+        w.searchLibrary();
         QString error;
         QVERIFY2(w.removeTheme(removed, error), qPrintable(error));
         QCOMPARE(w.path, kept);
         QCOMPARE(w.theme.data, before);
         QVERIFY(!w.drafts.contains(removed));
         QVERIFY(QFileInfo::exists(kept));
-        for (int n = 0; n < w.library->count(); ++n)
-            QVERIFY(w.library->item(n)->isHidden());
+        for (auto item : w.libraryItems) QVERIFY(item->isHidden());
         w.quitting = true;
     }
-    void deleteBuiltinPersistsAndRestores() {
+    void recycleThemePersistsAndRestores() {
         TestProfile dir;
-        const auto file = assets() + "/themes/nightfall.json";
-        QFile originalFile(file);
-        QVERIFY(originalFile.open(QIODevice::ReadOnly));
-        const auto original = originalFile.readAll();
-        originalFile.close();
+        const auto file = dir.path() + "/themes/custom/nightfall.json";
+        QFile originalFile(file); QVERIFY(originalFile.open(QIODevice::ReadOnly));
+        const auto original = originalFile.readAll(); originalFile.close();
         {
-            MainWindow w(dir.path());
-            w.choose(file);
-            QString error;
-            QVERIFY2(w.removeTheme(file, error), qPrintable(error));
-            QVERIFY(w.hiddenTheme(file));
-            QVERIFY(QFileInfo::exists(file));
-            w.quitting = true;
+            MainWindow w(dir.path()); w.choose(file);
+            QString error; QVERIFY2(w.removeTheme(file, error), qPrintable(error));
+            QVERIFY(!QFileInfo::exists(file));
+            QCOMPARE(w.path, w.runtime->library.defaultThemeFile()); w.quitting = true;
         }
         MainWindow reopened(dir.path());
-        QVERIFY(std::none_of(reopened.entries.begin(), reopened.entries.end(),
-                             [&](const MainWindow::Entry &e) { return e.path == file; }));
+        const auto backups = QDir(dir.path() + "/themes/deleted").entryList({"*.json"}, QDir::Files);
+        QCOMPARE(backups.size(), 1);
         reopened.restoreBuiltinThemes();
-        QVERIFY(!reopened.hiddenTheme(file));
-        QVERIFY(std::any_of(reopened.entries.begin(), reopened.entries.end(),
-                            [&](const MainWindow::Entry &e) { return e.path == file; }));
-        QVERIFY(originalFile.open(QIODevice::ReadOnly));
-        QCOMPARE(originalFile.readAll(), original);
+        QCOMPARE(reopened.libraryFolder, dir.path() + "/themes/deleted");
+        reopened.restoreLibraryItem(dir.path() + "/themes/deleted/" + backups.first());
+        QVERIFY(QFileInfo::exists(file));
+        QVERIFY(originalFile.open(QIODevice::ReadOnly)); QCOMPARE(originalFile.readAll(), original);
         reopened.quitting = true;
     }
     void removeExternalThemePreservesSourceAndCanReimport() {
@@ -773,7 +1103,7 @@ private slots:
         {
             MainWindow w(dir.path());
             w.choose(file);
-            w.choose(assets() + "/themes/nightfall.json");
+            w.choose(dir.path() + "/themes/custom/nightfall.json");
             w.quitting = true;
         }
         {
@@ -805,7 +1135,8 @@ private slots:
         w.addComponent("CPU");
         const auto before = w.theme.data, config = w.config;
         const auto count = w.entries.size();
-        QFile blocked(dir.path() + "/deleted-themes");
+        QVERIFY(QDir(dir.path() + "/themes/deleted").rmdir("."));
+        QFile blocked(dir.path() + "/themes/deleted");
         QVERIFY(blocked.open(QIODevice::WriteOnly));
         blocked.write("not a directory");
         blocked.close();
@@ -818,6 +1149,7 @@ private slots:
         QCOMPARE(w.config, config);
         QCOMPARE(w.entries.size(), count);
         QVERIFY(QFile::remove(blocked.fileName()));
+        QVERIFY(QDir().mkpath(dir.path() + "/themes/deleted"));
         QVERIFY(QFile::remove(dir.path() + "/config.json"));
         QVERIFY(QDir().mkpath(dir.path() + "/config.json"));
         // A settings failure after moving the file restores it before returning.
@@ -828,7 +1160,7 @@ private slots:
         QCOMPARE(w.theme.data, before);
         QCOMPARE(w.config, config);
         QCOMPARE(w.entries.size(), count);
-        QVERIFY(QDir(dir.path() + "/deleted-themes").entryList(QDir::Files).isEmpty());
+        QVERIFY(QDir(dir.path() + "/themes/deleted").entryList(QDir::Files).isEmpty());
         w.dirty = false;
         w.quitting = true;
     }
@@ -976,7 +1308,7 @@ private slots:
         TestProfile dir;
         MainWindow w(dir.path());
         QCOMPARE(w.sampling.interval(), 1000);
-        const auto file = assets() + "/themes/nightfall.json";
+        const auto file = dir.path() + "/themes/custom/nightfall.json";
         QVERIFY(std::any_of(w.entries.begin(), w.entries.end(),
                             [&](const MainWindow::Entry &entry) { return entry.path == file; }));
         w.choose(file);
@@ -1005,7 +1337,7 @@ private slots:
         TestProfile dir;
         MainWindow w(dir.path());
         QCOMPARE(w.theme.data, w.saved);
-        w.choose(assets() + "/themes/nightfall.json");
+        w.choose(dir.path() + "/themes/custom/nightfall.json");
         const auto checkbox = w.findChild<QCheckBox *>("weatherEnabled");
         QVERIFY(checkbox);
         QVERIFY(!checkbox->isChecked()); // Explicit user opt-out wins over the theme default.
@@ -1084,7 +1416,540 @@ private slots:
         w.dirty = false;
         w.quitting = true;
     }
-    void nativeAppearanceFollowsQtSettings() {
+    void layerVisibilityIconsPreserveEditingAndLightweightLabels() {
+        TestProfile dir;
+        const auto restore = qScopeGuard([&] { UiAppearance::instance().apply("system", dir.path()); });
+        MainWindow w(dir.path());
+        const auto close = qScopeGuard([&] { w.dirty = false; w.quitting = true; });
+        w.sampling.stop();
+        w.setEditing(true);
+        w.addComponent("CPU");
+        const auto group = w.selection().first();
+        const auto child = findLayer(w.theme.layers(), group)["children"].toArray().first().toObject()["id"].toString();
+        w.show();
+        QTest::qWait(50);
+        const auto itemFor = [&](const QString &id) -> QTreeWidgetItem * {
+            QTreeWidgetItemIterator it(w.tree);
+            while (*it) {
+                if ((*it)->data(0, Qt::UserRole).toString() == id) return *it;
+                ++it;
+            }
+            return nullptr;
+        };
+        const auto clickIndicator = [&](const QString &id, int column) {
+            auto item = itemFor(id);
+            if (!item) return false;
+            w.tree->scrollToItem(item);
+            QStyleOptionViewItem option;
+            option.initFrom(w.tree);
+            option.widget = w.tree;
+            option.rect = w.tree->visualRect(w.tree->indexFromItem(item, column));
+            option.features = QStyleOptionViewItem::HasCheckIndicator | QStyleOptionViewItem::HasDisplay;
+            option.text = item->text(column);
+            const auto rect = w.tree->style()->subElementRect(QStyle::SE_ItemViewItemCheckIndicator, &option, w.tree);
+            if (rect.isEmpty()) return false;
+            QTest::mouseClick(w.tree->viewport(), Qt::LeftButton, Qt::NoModifier, rect.center());
+            return true;
+        };
+        QVERIFY(clickIndicator(child, 0));
+        QVERIFY(!findLayer(w.theme.layers(), child)["visible"].toBool(true));
+        QCOMPARE(itemFor(child)->checkState(0), Qt::Unchecked);
+        w.undo();
+        QVERIFY(findLayer(w.theme.layers(), child)["visible"].toBool(true));
+        w.redo();
+        QVERIFY(!findLayer(w.theme.layers(), child)["visible"].toBool(true));
+        w.undo();
+        QVERIFY(clickIndicator(group, 0));
+        QVERIFY(!findLayer(w.theme.layers(), group)["visible"].toBool(true));
+        w.undo();
+        QVERIFY(clickIndicator(group, 1));
+        QVERIFY(findLayer(w.theme.layers(), group)["locked"].toBool());
+        const auto locked = w.theme.data;
+        QVERIFY(clickIndicator(child, 0));
+        QCOMPARE(w.theme.data, locked); // A locked ancestor still blocks visibility changes.
+        QCOMPARE(itemFor(child)->checkState(0), Qt::Checked);
+        QVERIFY(clickIndicator(group, 1));
+        QVERIFY(!findLayer(w.theme.layers(), group)["locked"].toBool());
+        w.tree->setCurrentItem(itemFor(child), 0);
+        QTest::keyClick(w.tree, Qt::Key_Space);
+        QVERIFY(!findLayer(w.theme.layers(), child)["visible"].toBool(true));
+        const auto edited = w.theme.data;
+        const auto shots = qEnvironmentVariable("TURING_LAYER_UI_SHOTS");
+        for (const bool english : {false, true}) {
+            w.english = english;
+            w.build();
+            w.setEditing(true);
+            QSignalSpy request(&w, &MainWindow::lightweightRequested);
+            for (const bool expanded : {false, true}) {
+                w.setSidebarExpanded(expanded);
+                auto light = w.findChild<QToolButton *>("sidebarLightweight");
+                QVERIFY(light && !light->icon().isNull());
+                QCOMPARE(light->toolButtonStyle(), expanded ? Qt::ToolButtonTextBesideIcon : Qt::ToolButtonIconOnly);
+                QCOMPARE(light->text(), english ? QString("Lightweight Mode") : QString::fromUtf8("轻量模式"));
+                light->click();
+                QCOMPARE(request.count(), expanded ? 2 : 1);
+                if (!shots.isEmpty()) {
+                    QDir().mkpath(shots);
+                    w.selectUiTheme("catppuccin-frappe");
+                    QCoreApplication::processEvents();
+                    QVERIFY(w.grab().save(shots + (english ? "/english" : "/chinese")
+                        + (expanded ? "-expanded.png" : "-collapsed.png")));
+                }
+            }
+            QCOMPARE(w.theme.data, edited);
+        }
+    }
+    void bundledUiPalettesSwitchAndSurviveLightweightMode() {
+        TestProfile dir;
+        const auto restore = qScopeGuard([&] { UiAppearance::instance().apply("system", dir.path()); });
+        ApplicationController app(dir.path(), dir.path() + "/themes/custom/nightfall.json", [] { return true; });
+        app.showWindow();
+        auto w = app.window();
+        w->sampling.stop();
+        w->setPage(MainWindow::SettingsPage);
+        const auto frame = w->frame;
+        const auto displayTheme = w->theme.data;
+        const auto palettes = uiThemes(dir.path());
+        QVERIFY(palettes.size() >= 12);
+        QCOMPARE(w->uiThemeBox->count(), palettes.size() + 1);
+        const auto frappe = w->uiThemeBox->itemText(w->uiThemeBox->findData("catppuccin-frappe"));
+        QVERIFY(frappe.contains(QString::fromUtf8("Catppuccin Frapp\xc3\xa9")));
+        const auto luminance = [](const QColor &color) {
+            const auto channel = [](double c) { return c <= .04045 ? c / 12.92 : std::pow((c + .055) / 1.055, 2.4); };
+            return .2126 * channel(color.redF()) + .7152 * channel(color.greenF()) + .0722 * channel(color.blueF());
+        };
+        const auto contrast = [&](const QColor &a, const QColor &b) {
+            const auto x = luminance(a), y = luminance(b);
+            return (qMax(x, y) + .05) / (qMin(x, y) + .05);
+        };
+        QSet<QString> modes;
+        for (const auto &palette : palettes) {
+            QVERIFY2(palette.error.isEmpty(), qPrintable(palette.error));
+            QVERIFY(QFileInfo::exists(palette.file));
+            modes.insert(palette.mode);
+            const int row = w->uiThemeBox->findData(palette.id);
+            QVERIFY(row >= 0);
+            w->uiThemeBox->setCurrentIndex(row);
+            QCoreApplication::processEvents();
+            QCOMPARE(w->config["ui_theme"].toString(), palette.id);
+            QCOMPARE(QApplication::palette().color(QPalette::Window), palette.colors["window"]);
+            QCOMPARE(QApplication::palette().color(QPalette::Text), palette.colors["text"]);
+            QCOMPARE(w->sidebar->palette().color(QPalette::Window), palette.colors["base"]);
+            QCOMPARE(w->sensorTable->palette().color(QPalette::Base), palette.colors["base"]);
+            QCOMPARE(app.menu->palette().color(QPalette::Text), UiAppearance::instance().systemMenuPalette().color(QPalette::Text));
+            QTextDocument links;
+            links.setHtml(w->findChild<QLabel *>("weatherCredit")->text());
+            const auto link = links.find("Open-Meteo");
+            QVERIFY(!link.isNull());
+            QCOMPARE(link.charFormat().foreground().color(), palette.colors["link"]);
+            QCOMPARE(w->findChild<QFrame *>("sidebarSeparator")->palette().color(QPalette::Mid), palette.colors["border"]);
+            for (auto background : {"window", "base", "button"})
+                QVERIFY2(contrast(palette.colors["text"], palette.colors[background]) >= 4.5, qPrintable(palette.id + '/' + background));
+            QVERIFY2(contrast(palette.colors["accent_text"], palette.colors["accent"]) >= 4.5, qPrintable(palette.id + "/selection"));
+            QCOMPARE(w->theme.data, displayTheme);
+            QCOMPARE(w->frame, frame);
+            const auto shots = qEnvironmentVariable("TURING_UI_PALETTE_SHOTS");
+            if (!shots.isEmpty()) {
+                QDir().mkpath(shots);
+                QVERIFY(w->grab().save(shots + '/' + palette.id + ".png"));
+                if (palette.id == "catppuccin-mocha") {
+                    w->setPage(MainWindow::LibraryPage);
+                    QCoreApplication::processEvents();
+                    QVERIFY(w->grab().save(shots + "/mocha-library.png"));
+                    w->setPage(MainWindow::SettingsPage);
+                    w->resize(760, 680);
+                    QCoreApplication::processEvents();
+                    QVERIFY(w->grab().save(shots + "/mocha-compact.png"));
+                    w->resize(1280, 820);
+                }
+            }
+        }
+        QCOMPARE(modes, (QSet<QString>{"light", "dark"}));
+        w->uiThemeBox->setCurrentIndex(w->uiThemeBox->findData("catppuccin-mocha"));
+        const auto palette = QApplication::palette();
+        QVERIFY(app.enterLightweight());
+        QVERIFY(!app.window());
+        QTRY_COMPARE(app.menu->palette().color(QPalette::Window), UiAppearance::instance().systemMenuPalette().color(QPalette::Window));
+        app.showWindow();
+        app.window()->sampling.stop();
+        QCOMPARE(app.window()->uiThemeBox->currentData().toString(), QString("catppuccin-mocha"));
+        QCOMPARE(QApplication::palette(), palette);
+    }
+    void folderLibraryPreservesDraftsAndShowsExplorerActions() {
+        TestProfile dir;
+        MainWindow w(dir.path());
+        const auto close = qScopeGuard([&] { w.dirty = false; w.quitting = true; });
+        QString unexpectedDialog;
+        QTimer popupWatcher;
+        connect(&popupWatcher, &QTimer::timeout, &w, [&] {
+            if (auto box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget())) {
+                unexpectedDialog = box->text(); qWarning() << unexpectedDialog; box->reject();
+            }
+        });
+        popupWatcher.start(100);
+        w.sampling.stop(); w.show();
+        w.newTheme(); const auto first = w.path;
+        w.addComponent("CPU"); const auto content = w.theme.layers();
+        w.newTheme(); QVERIFY(w.drafts.contains(first));
+        QString error;
+        QVERIFY2(w.renameLibraryPath(first, "Renamed", error), qPrintable(error));
+        const auto renamed = dir.path() + "/themes/custom/Renamed.json";
+        QVERIFY(w.drafts.contains(renamed)); QVERIFY(!QFileInfo::exists(first));
+        w.choose(renamed); QCOMPARE(w.theme.layers(), content); QVERIFY(w.dirty);
+        QCOMPARE(w.title->text(), QString("Renamed *"));
+        QCOMPARE(w.editorThemeTitle->text(), w.title->text());
+        QVERIFY(w.findChild<QToolButton *>("renamePreviewTheme"));
+        QVERIFY(w.findChild<QToolButton *>("renameEditorTheme"));
+        QVERIFY2(w.renameLibraryPath(w.path, "Active renamed", error), qPrintable(error));
+        QCOMPARE(w.title->text(), QString("Active renamed *"));
+        QCOMPARE(w.path, dir.path() + "/themes/custom/Active renamed.json");
+        const auto folder = w.runtime->library.createFolder(w.runtime->library.root + "/custom", "Nested");
+        w.transferLibraryItem(w.path, folder, false);
+        QCOMPARE(w.path, folder + "/Active renamed.json"); QCOMPARE(w.theme.layers(), content); QVERIFY(w.dirty);
+        w.setPage(MainWindow::LibraryPage); w.selectLibraryFolder(folder); w.buildFolderTree();
+        QCOMPARE(w.library, w.folderTree);
+        QCOMPARE(w.library->currentItem()->data(0, Qt::UserRole).toString(), folder);
+        QCOMPARE(w.library->currentItem()->childCount(), 1);
+        QVERIFY(w.library->currentItem()->child(0)->text(0).startsWith("Active renamed"));
+        bool inspected = false;
+        QTimer::singleShot(0, &w, [&] {
+            auto menu = w.findChild<QMenu *>("themeLibraryMenu"); QVERIFY(menu);
+            const auto closeMenu = qScopeGuard([&] { menu->close(); });
+            for (auto action : {"libraryRename", "libraryCopy", "libraryCut", "libraryDelete", "libraryPurge"})
+                QVERIFY(menu->findChild<QAction *>(action));
+            inspected = true; menu->close();
+        });
+        w.libraryMenu(w.path, QPoint(30, 30)); QVERIFY(inspected);
+        QVERIFY2(w.removeTheme(folder, error), qPrintable(error));
+        QCOMPARE(w.path, w.runtime->library.defaultThemeFile()); QVERIFY(!QFileInfo::exists(folder));
+        const auto recycled = w.runtime->library.root + "/deleted/Nested";
+        w.restoreLibraryItem(recycled); QVERIFY(QFileInfo::exists(folder + "/Active renamed.json"));
+        QVERIFY2(w.removeTheme(folder, error, true), qPrintable(error));
+        QVERIFY(!QFileInfo::exists(folder));
+        QVERIFY(!w.findChild<QLabel *>("diskPartitionHint"));
+        for (auto button : w.statusBar()->findChildren<QPushButton *>()) QVERIFY(button->text() != "Exit" && button->text() != QString::fromUtf8("退出"));
+        QVERIFY(w.dataState->mapTo(&w, QPoint()).x() > w.width() / 2);
+        QVERIFY2(unexpectedDialog.isEmpty(), qPrintable(unexpectedDialog));
+    }
+    void trayMenuKeepsSystemStyleAcrossPalettes() {
+        TestProfile dir;
+        const auto restore = qScopeGuard([&] { UiAppearance::instance().apply("system", dir.path()); });
+        ApplicationController app(dir.path(), {}, [] { return true; });
+        app.showWindow();
+        const auto system = UiAppearance::instance().systemMenuPalette();
+        const auto actions = app.menu->actions();
+        QCOMPARE(actions.size(), 9);
+        QCOMPARE(actions[0], app.showAction);
+        QVERIFY(actions[1]->isSeparator());
+        QCOMPARE(actions[2], app.collectAction);
+        QCOMPARE(actions[3]->menu(), app.portsMenu);
+        QCOMPARE(actions[4], app.sendAction);
+        QVERIFY(actions[5]->isSeparator());
+        QCOMPARE(actions[6], app.lightAction);
+        QVERIFY(actions[7]->isSeparator());
+        QCOMPARE(actions[8], app.quitAction);
+        for (const auto &id : {QString("catppuccin-mocha"), QString("catppuccin-latte"), QString("dracula")}) {
+            app.window()->selectUiTheme(id);
+            QCOMPARE(app.menu->palette().color(QPalette::Window), system.color(QPalette::Window));
+            QCOMPARE(app.menu->palette().color(QPalette::Text), system.color(QPalette::Text));
+            QVERIFY(app.menu->property("nativeMenuStyle").toBool());
+            QVERIFY(!app.tray->icon().isNull());
+        }
+        const auto shots = qEnvironmentVariable("TURING_UI_PALETTE_SHOTS");
+        app.menu->popup(QPoint(10, 10));
+        app.menu->setActiveAction(app.lightAction);
+        QCoreApplication::processEvents();
+        const auto rendered = app.menu->grab().toImage();
+        QCOMPARE(rendered.pixelColor(10, 5), system.color(QPalette::Window));
+        const auto hovered = app.menu->actionGeometry(app.lightAction);
+        QCOMPARE(rendered.pixelColor(hovered.right() - 18, hovered.center().y()), system.color(QPalette::Highlight));
+        QVERIFY(app.menu->width() >= 174);
+        if (!shots.isEmpty()) {
+            QDir().mkpath(shots);
+            QVERIFY(rendered.save(shots + "/system-tray-menu.png"));
+        }
+        app.menu->hide();
+    }
+    void libraryToolbarSearchAndTreeActions() {
+        TestProfile dir;
+        QDir().mkpath(dir.path() + "/themes/official/Category/Nested");
+        MainWindow w(dir.path());
+        w.sampling.stop(); w.show();
+        w.choose(dir.path() + "/themes/custom/nightfall.json");
+        const auto original = w.theme.data;
+        QVERIFY(w.librarySearchPanel->isHidden());
+        QVERIFY(!w.findChild<QPushButton *>("deleteThemeButton"));
+        auto toolbar = w.findChild<QWidget *>("libraryTools"); QVERIFY(toolbar);
+        QCOMPARE(toolbar->findChildren<QToolButton *>().size(), 7);
+        QVERIFY(w.findChild<QToolButton *>("libraryImport"));
+        w.findChild<QToolButton *>("libraryToggleSearch")->click();
+        QVERIFY(w.librarySearchPanel->isVisible());
+        w.search->setText("No matching theme");
+        QCOMPARE(w.libraryQuery, QString("No matching theme"));
+        QVERIFY(w.libraryEmpty->isVisible());
+        w.search->setText("Nightfall");
+        QCOMPARE(w.libraryQuery, QString("Nightfall"));
+        QVERIFY(!w.findChild<QToolButton *>("librarySearchSubmit"));
+        QVERIFY(!w.libraryEmpty->isVisible());
+        auto newMenu = w.findChild<QMenu *>("libraryNewMenu"); QVERIFY(newMenu);
+        QCOMPARE(newMenu->actions().size(), 2);
+        QVERIFY(newMenu->actions()[0]->text().contains("theme", Qt::CaseInsensitive) || newMenu->actions()[0]->text().contains(QString::fromUtf8("主题")));
+        w.search->clear();
+        w.findChild<QToolButton *>("libraryCollapseAll")->click();
+        for (int n = 0; n < w.library->topLevelItemCount(); ++n) QVERIFY(!w.library->topLevelItem(n)->isExpanded());
+        auto official = w.library->topLevelItem(0);
+        w.library->setCurrentItem(official);
+        w.findChild<QToolButton *>("libraryExpandSelected")->click();
+        QVERIFY(official->isExpanded());
+        QVERIFY(official->child(0)->isExpanded());
+        w.findChild<QToolButton *>("libraryLocate")->click();
+        QVERIFY(w.libraryQuery.isEmpty());
+        QCOMPARE(w.library->currentItem()->data(0, Qt::UserRole).toString(), w.path);
+        QVERIFY(w.library->currentItem()->parent()->isExpanded());
+        QCOMPARE(w.theme.data, original);
+        const auto external = dir.path() + "/Imported theme.json";
+        Theme::starter().save(external);
+        w.selectLibraryFolder(dir.path() + "/themes/custom");
+        const bool nativeDialogsDisabled = qApp->testAttribute(Qt::AA_DontUseNativeDialogs);
+        qApp->setAttribute(Qt::AA_DontUseNativeDialogs, true);
+        const auto restoreDialogs = qScopeGuard([&] { qApp->setAttribute(Qt::AA_DontUseNativeDialogs, nativeDialogsDisabled); });
+        bool importDialogSeen = false;
+        QTimer::singleShot(0, &w, [&] {
+            auto dialog = w.findChild<QFileDialog *>();
+            QVERIFY(dialog);
+            importDialogSeen = true;
+            dialog->selectFile(external);
+            QMetaObject::invokeMethod(dialog, "accept", Qt::QueuedConnection);
+        });
+        w.findChild<QToolButton *>("libraryImport")->click();
+        QVERIFY(importDialogSeen);
+        QCOMPARE(w.path, dir.path() + "/themes/custom/Imported theme.json");
+        QVERIFY(QFileInfo::exists(w.path));
+        QVERIFY(QFileInfo::exists(external));
+        w.findChild<QToolButton *>("libraryHide")->click();
+        QVERIFY(w.librarySplit->paneCollapsed(0));
+        QCOMPARE(w.librarySplit->sizes()[0], 0);
+        w.selectOpenedTheme();
+        QVERIFY(!w.librarySplit->paneCollapsed(0));
+        QVERIFY(w.librarySplit->sizes()[0] > 0);
+        const auto shots = qEnvironmentVariable("TURING_PANEL_SHOTS");
+        if (!shots.isEmpty()) { QDir().mkpath(shots); QVERIFY(w.grab().save(shots + "/toolbar-search.png")); }
+        w.quitting = true;
+    }
+    void overviewHasAFileAndFolderOpenKeepsThumbnails() {
+        TestProfile dir;
+        MainWindow w(dir.path());
+        w.sampling.stop(); w.show();
+        const auto file = dir.path() + "/themes/custom/system overview.json";
+        QCOMPARE(w.path, file);
+        QCOMPARE(w.config["selected_theme"].toString(), file);
+        QVERIFY(QFileInfo::exists(w.path));
+        for (auto item : w.libraryItems) {
+            const auto path = item->data(0, Qt::UserRole).toString();
+            QVERIFY(!path.isEmpty());
+            QCOMPARE(item->text(0).section('\n', 0, 0), QFileInfo(path).fileName());
+        }
+        auto folder = w.library->topLevelItem(1);
+        folder->setExpanded(true);
+        QTRY_VERIFY(!folder->child(0)->icon(0).isNull());
+        QTRY_VERIFY(!folder->child(1)->icon(0).isNull());
+        const auto icon0 = folder->child(0)->icon(0).cacheKey(), icon1 = folder->child(1)->icon(0).cacheKey();
+        const auto selected = w.path;
+        QTimer::singleShot(0, &w, [&] {
+            auto menu = w.findChild<QMenu *>("themeLibraryMenu"); QVERIFY(menu);
+            const auto close = qScopeGuard([&] { menu->close(); });
+            auto open = menu->findChild<QAction *>("libraryOpen"); QVERIFY(open); open->trigger();
+        });
+        w.libraryMenu(dir.path() + "/themes/custom", QPoint(20, 20));
+        QCOMPARE(w.path, selected);
+        QCOMPARE(folder->child(0)->icon(0).cacheKey(), icon0);
+        QCOMPARE(folder->child(1)->icon(0).cacheKey(), icon1);
+        w.buildLibrary();
+        folder = w.library->topLevelItem(1);
+        QVERIFY(!folder->child(0)->icon(0).isNull());
+        QVERIFY(!folder->child(1)->icon(0).isNull());
+        w.sidebarToggle->click();
+        QVERIFY(!w.sidebarToggle->icon().isNull());
+        QVERIFY(w.sidebarToggle->text().isEmpty());
+        QVERIFY(w.findChild<QToolButton *>("sidebarLightweight")->mapTo(w.sidebar, QPoint()).y() < w.sidebarToggle->mapTo(w.sidebar, QPoint()).y());
+        const auto shots = qEnvironmentVariable("TURING_PANEL_SHOTS");
+        if (!shots.isEmpty()) {
+            QDir().mkpath(shots);
+            QCoreApplication::processEvents();
+            QVERIFY(w.grab().save(shots + "/overview-file-and-sidebar.png"));
+        }
+        w.quitting = true;
+    }
+    void collapsiblePanesRestoreAcrossOrientationsAndWindowRebuild() {
+        TestProfile dir;
+        MainWindow w(dir.path());
+        w.sampling.stop(); w.show();
+        QTest::qWait(50);
+        const auto capture = [&](const QString &name) {
+            const auto shots = qEnvironmentVariable("TURING_PANEL_SHOTS");
+            if (!shots.isEmpty()) {
+                QDir().mkpath(shots); QCoreApplication::processEvents();
+                QVERIFY(w.grab().save(shots + '/' + name + ".png"));
+            }
+        };
+        const auto clickToggle = [&](PaneSplitter *splitter, int index, Qt::ArrowType before, Qt::ArrowType after) {
+            auto handle = splitter->handle(index);
+            auto toggle = handle->findChild<QToolButton *>("paneToggle");
+            QVERIFY(handle && toggle);
+            QCOMPARE(toggle->arrowType(), before);
+            QEvent leave(QEvent::Leave); QApplication::sendEvent(handle, &leave);
+            QVERIFY(!toggle->isVisible());
+            const auto point = handle->rect().center();
+            QEnterEvent enter(point, handle->mapTo(&w, point), handle->mapToGlobal(point));
+            QApplication::sendEvent(handle, &enter);
+            QTRY_VERIFY(toggle->isVisible());
+            QTest::mouseClick(toggle, Qt::LeftButton);
+            QCoreApplication::processEvents();
+            QCOMPARE(toggle->arrowType(), after);
+        };
+        clickToggle(w.librarySplit, 1, Qt::LeftArrow, Qt::RightArrow);
+        QVERIFY(w.librarySplit->paneCollapsed(0)); QCOMPARE(w.librarySplit->sizes()[0], 0);
+        capture("library-hidden-horizontal");
+        clickToggle(w.librarySplit, 2, Qt::RightArrow, Qt::LeftArrow);
+        QVERIFY(w.librarySplit->paneCollapsed(2)); QCOMPARE(w.librarySplit->sizes()[2], 0);
+        w.resize(760, 680);
+        QTRY_COMPARE(w.librarySplit->orientation(), Qt::Vertical);
+        QVERIFY(w.librarySplit->paneCollapsed(0) && w.librarySplit->paneCollapsed(2));
+        QCOMPARE(w.librarySplit->sizes()[0], 0); QCOMPARE(w.librarySplit->sizes()[2], 0);
+        clickToggle(w.librarySplit, 1, Qt::DownArrow, Qt::UpArrow);
+        clickToggle(w.librarySplit, 2, Qt::UpArrow, Qt::DownArrow);
+        QVERIFY(w.librarySplit->sizes()[0] > 0 && w.librarySplit->sizes()[2] > 0);
+        capture("panes-restored-vertical");
+        w.setEditing(true);
+        QTRY_COMPARE(w.editorSplit->orientation(), Qt::Vertical);
+        clickToggle(w.editorSplit, 1, Qt::DownArrow, Qt::UpArrow);
+        QVERIFY(w.editorSplit->paneCollapsed(1)); QCOMPARE(w.editorSplit->sizes()[1], 0);
+        capture("editor-hidden-vertical");
+        w.resize(1280, 820);
+        QTRY_COMPARE(w.editorSplit->orientation(), Qt::Horizontal);
+        clickToggle(w.editorSplit, 1, Qt::LeftArrow, Qt::RightArrow);
+        QVERIFY(w.editorSplit->sizes()[1] > 0);
+        w.librarySplit->setPaneCollapsed(0, true);
+        w.librarySplit->setPaneCollapsed(2, true);
+        w.editorSplit->setPaneCollapsed(1, true);
+        w.build();
+        QVERIFY(w.librarySplit->paneCollapsed(0) && w.librarySplit->paneCollapsed(2));
+        QVERIFY(w.editorSplit->paneCollapsed(1));
+        QCOMPARE(w.editorSplit->sizes()[1], 0);
+        w.quitting = true;
+    }
+    void traySerialMenuListsPortsAndMarksOnlyConnectedPort() {
+        TestProfile dir;
+        ApplicationController app(dir.path(), {}, [] { return true; });
+        app.listPorts = [] { return QList<Port>{{"TEST-MISSING-PORT-A", "First serial port", false}, {"TEST-MISSING-PORT-B", "Second serial port", false}}; };
+        app.refreshPortMenu();
+        QList<QAction *> ports;
+        for (auto action : app.portsMenu->actions()) if (!action->property("serialPort").toString().isEmpty()) ports.append(action);
+        QCOMPARE(ports.size(), 2);
+        QCOMPARE(ports[0]->text(), QString("TEST-MISSING-PORT-A"));
+        QVERIFY(!ports[0]->isChecked() && !ports[1]->isChecked());
+        DeviceStatus connected; connected.connected = true; connected.port = "TEST-MISSING-PORT-B";
+        app.updatePortChecks(connected);
+        QVERIFY(!ports[0]->isChecked()); QVERIFY(ports[1]->isChecked());
+        connected.connected = false; app.updatePortChecks(connected);
+        QVERIFY(!ports[0]->isChecked() && !ports[1]->isChecked());
+        ports[0]->trigger();
+        QCOMPARE(app.display().config["port"].toString(), QString("TEST-MISSING-PORT-A"));
+        QTRY_VERIFY(!app.display().device.status().connecting);
+        QVERIFY(!app.display().device.status().connected);
+        app.updateTrayState(); QVERIFY(!ports[0]->isChecked());
+        QVERIFY(!app.isLightweight()); // A failed serial open does not change window mode.
+        app.listPorts = [] { return QList<Port>(); };
+        app.refreshPortMenu();
+        QVERIFY(!app.portsMenu->actions().first()->isEnabled());
+        QVERIFY(!app.portsMenu->findChild<QAction *>("trayDisconnect")->isEnabled());
+    }
+    void customUiPaletteFilesReloadValidateAndRestore() {
+        TestProfile dir;
+        const auto restore = qScopeGuard([&] { UiAppearance::instance().apply("system", dir.path()); });
+        QDir().mkpath(dir.path() + "/ui-themes");
+        const auto fileName = dir.path() + "/ui-themes/desk.json";
+        auto json = QJsonObject{{"format", "turing-ui-palette"}, {"version", 1}, {"name", "Desk"},
+            {"extends", "catppuccin-mocha"}, {"colors", QJsonObject{{"window", "#112233"}, {"accent", "#ffcc88"}}}};
+        const auto write = [&](const QJsonObject &value) {
+            QFile file(fileName);
+            return file.open(QIODevice::WriteOnly) && file.write(QJsonDocument(value).toJson()) > 0;
+        };
+        QVERIFY(write(json));
+        {
+            MainWindow w(dir.path());
+            w.sampling.stop();
+            const auto display = w.frame;
+            w.uiThemeBox->setCurrentIndex(w.uiThemeBox->findData("custom:desk"));
+            QCOMPARE(QApplication::palette().color(QPalette::Window), QColor("#112233"));
+            QCOMPARE(w.config["ui_theme"].toString(), QString("custom:desk"));
+            const auto valid = QApplication::palette();
+            json["colors"] = QJsonObject{{"window", "not-a-color"}};
+            QVERIFY(write(json));
+            w.findChild<QPushButton *>("reloadUiThemes")->click();
+            QCOMPARE(QApplication::palette(), valid);
+            QVERIFY(!w.uiThemeError.isEmpty());
+            QCOMPARE(w.frame, display);
+            json["colors"] = QJsonObject{{"window", "#223344"}};
+            QVERIFY(write(json));
+            w.findChild<QPushButton *>("reloadUiThemes")->click();
+            QCOMPARE(QApplication::palette().color(QPalette::Window), QColor("#223344"));
+            QVERIFY(w.uiThemeError.isEmpty());
+            json["colors"] = QJsonObject{{"typo", "#223344"}};
+            QVERIFY(write(json));
+            QVERIFY(loadUiTheme("custom:desk", dir.path()).error.contains("unknown color role"));
+            json["colors"] = QJsonObject{{"window", "#223344"}};
+            QVERIFY(write(json));
+            QVERIFY(!loadUiTheme("custom:../desk", dir.path()).error.isEmpty());
+        }
+        {
+            MainWindow copy(dir.path());
+            copy.sampling.stop();
+            QCOMPARE(copy.uiThemeBox->currentData().toString(), QString("custom:desk"));
+            QCOMPARE(QApplication::palette().color(QPalette::Window), QColor("#223344"));
+            copy.findChild<QPushButton *>("copyUiTheme")->click();
+            QCOMPARE(copy.config["ui_theme"].toString(), QString("custom:my-palette"));
+            const auto exported = loadUiTheme("custom:my-palette", dir.path());
+            QVERIFY(exported.error.isEmpty());
+            QCOMPARE(exported.colors["window"], QColor("#223344"));
+            QFile broken(dir.path() + "/ui-themes/my-palette.json");
+            QVERIFY(broken.open(QIODevice::WriteOnly));
+            broken.write("{broken");
+        }
+        MainWindow fallback(dir.path());
+        fallback.sampling.stop();
+        QCOMPARE(UiAppearance::instance().currentId(), QString("system"));
+        QVERIFY(!fallback.uiThemeError.isEmpty());
+        QCOMPARE(fallback.config["ui_theme"].toString(), QString("custom:my-palette"));
+    }
+    void statusIndicatorsAndFourPageNavigation() {
+        TestProfile dir;
+        const auto restore = qScopeGuard([&] { UiAppearance::instance().apply("system", dir.path()); });
+        MainWindow w(dir.path());
+        QCOMPARE(w.navigation->count(), 4);
+        QCOMPARE(w.pages->count(), 4);
+        for (int n = 0; n < w.navigation->count(); ++n)
+            QVERIFY(!w.navigation->item(n)->data(Qt::AccessibleTextRole).toString().contains("诊断"));
+        for (auto button : w.findChildren<QPushButton *>()) {
+            QVERIFY(!button->text().contains("导出诊断"));
+            QVERIFY(!button->text().contains("Export diagnostics"));
+        }
+        w.updateStatus();
+        QCOMPARE(w.dataState->property("statusTone").toString(), QString("success"));
+        QCOMPARE(w.connection->property("statusTone").toString(), QString("muted"));
+        for (const auto &id : {"catppuccin-mocha", "catppuccin-latte"}) {
+            w.selectUiTheme(id);
+            QTextDocument text;
+            text.setHtml(w.dataState->text());
+            const auto dot = text.find("●");
+            QCOMPARE(dot.charFormat().foreground().color(), loadUiTheme(id, dir.path()).colors["success"]);
+            QVERIFY(!w.dataState->accessibleName().isEmpty());
+        }
+        w.sampling.stop();
+        w.updateStatus();
+        QCOMPARE(w.dataState->property("statusTone").toString(), QString("muted"));
+    }
+    void systemPaletteAndFontDriveFlatAppearance() {
         TestProfile dir;
         {
             QFile file(dir.path() + "/config.json");
@@ -1104,7 +1969,6 @@ private slots:
         auto desktopFont = previousFont;
         desktopFont.setPointSize(12);
         QApplication::setFont(desktopFont);
-        const auto desktopStyle = QApplication::style();
         ApplicationController app(dir.path(), {}, [] { return true; });
         app.showWindow();
         auto w = app.window();
@@ -1112,17 +1976,14 @@ private slots:
         QVERIFY(!w->config.contains("palette"));
         const auto verifyAppearance = [&] {
             QCoreApplication::processEvents();
-            QCOMPARE(QApplication::style(), desktopStyle);
-            const QList<QWidget *> widgets{w, w->root, w->title, w->navigation, w->library, w->tree,
+            QVERIFY(qApp->styleSheet().contains("Shared flat widget design"));
+            QCOMPARE(QApplication::palette().color(QPalette::Window), desktopPalette.color(QPalette::Window));
+            QCOMPARE(QApplication::palette().color(QPalette::Highlight), desktopPalette.color(QPalette::Highlight));
+            const QList<QWidget *> widgets{w, w->root, w->navigation, w->library, w->tree,
                                           w->portBox, w->connectButton, w->brightness, w->mirrorBox,
-                                          w->sensorTable, w->diagnosticText, w->canvas, app.menu.get()};
+                                          w->sensorTable, w->canvas};
             for (auto widget : widgets) {
                 QVERIFY(widget->styleSheet().isEmpty());
-                QCOMPARE(widget->style(), desktopStyle);
-                QVERIFY(!widget->testAttribute(Qt::WA_SetPalette));
-                QVERIFY(!widget->testAttribute(Qt::WA_SetFont));
-                QCOMPARE(widget->palette().color(QPalette::Window), desktopPalette.color(QPalette::Window));
-                QCOMPARE(widget->palette().color(QPalette::Highlight), desktopPalette.color(QPalette::Highlight));
                 QCOMPARE(widget->font(), QApplication::font(widget));
             }
             for (auto combo : w->findChildren<QComboBox *>()) {
@@ -1189,6 +2050,58 @@ private slots:
         QVERIFY(!w.sample.timestamp.isEmpty());
         w.quitting = true;
     }
+    void sensorColumnsResizeFromHeaderAndKeepTheirWidths() {
+        TestProfile dir;
+        QJsonArray widths;
+        {
+            MainWindow w(dir.path());
+            w.sampling.stop(); w.show();
+            w.selectUiTheme("catppuccin-mocha");
+            w.setPage(MainWindow::SensorsPage);
+            QCoreApplication::processEvents();
+            auto table = w.sensorTable;
+            auto header = table->horizontalHeader();
+            QVERIFY(table->showGrid());
+            QVERIFY(!header->stretchLastSection());
+            for (int column = 0; column < 3; ++column)
+                QCOMPARE(header->sectionResizeMode(column), QHeaderView::Interactive);
+            const int before = table->columnWidth(0);
+            const QPoint start(header->sectionViewportPosition(0) + before - 1, header->height() / 2);
+            const QPoint end = start + QPoint(64, 0);
+            QTest::mousePress(header->viewport(), Qt::LeftButton, Qt::NoModifier, start);
+            QMouseEvent move(QEvent::MouseMove, QPointF(end), QPointF(header->viewport()->mapToGlobal(end)),
+                             Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(header->viewport(), &move);
+            QTest::mouseRelease(header->viewport(), Qt::LeftButton, Qt::NoModifier, end);
+            QTRY_COMPARE(table->columnWidth(0), before + 64);
+            table->setColumnWidth(1, 310);
+            table->setColumnWidth(2, 440);
+            widths = w.config["sensor_column_widths"].toArray();
+            QCOMPARE(widths, QJsonArray({before + 64, 310, 440}));
+            w.tick();
+            w.resize(760, 680);
+            QCoreApplication::processEvents();
+            for (int column = 0; column < 3; ++column) QCOMPARE(table->columnWidth(column), widths[column].toInt());
+            w.english = !w.english;
+            w.build();
+            QCoreApplication::processEvents();
+            for (int column = 0; column < 3; ++column) QCOMPARE(w.sensorTable->columnWidth(column), widths[column].toInt());
+            const auto shots = qEnvironmentVariable("TURING_PANEL_SHOTS");
+            if (!shots.isEmpty()) {
+                QDir().mkpath(shots);
+                w.resize(1280, 820);
+                QCoreApplication::processEvents();
+                QVERIFY(w.grab().save(shots + "/sensors-resizable-columns.png"));
+            }
+            w.quitting = true;
+        }
+        MainWindow reopened(dir.path());
+        reopened.sampling.stop(); reopened.show();
+        reopened.setPage(MainWindow::SensorsPage);
+        QCoreApplication::processEvents();
+        for (int column = 0; column < 3; ++column) QCOMPARE(reopened.sensorTable->columnWidth(column), widths[column].toInt());
+        reopened.quitting = true;
+    }
     void memoryGbAndWeatherSettings() {
         TestProfile dir;
         MainWindow w(dir.path());
@@ -1227,7 +2140,7 @@ private slots:
     void ungroupPreservesOfficialPixels() {
         TestProfile dir;
         MainWindow w(dir.path());
-        w.choose(assets() + "/official/config/微星.data");
+        w.choose(assets() + "/themes/official/微星.data");
         auto before = w.renderer.render(w.theme, w.sample, true);
         QStringList groups;
         for (auto value : w.theme.layers()) {
@@ -1244,5 +2157,10 @@ private slots:
     }
 };
 } // namespace Screen
-QTEST_MAIN(Screen::GuiTest)
+int main(int argc, char **argv) {
+    qputenv("TURING_QT_ISOLATED_LIBRARY", "1");
+    QApplication app(argc, argv);
+    Screen::GuiTest test;
+    return QTest::qExec(&test, argc, argv);
+}
 #include "gui_test.moc"

@@ -1,0 +1,26 @@
+{
+  "format": "turing-ui-palette",
+  "version": 1,
+  "name": "Solarized Light",
+  "mode": "light",
+  "order": 41,
+  "source": "https://github.com/altercation/solarized",
+  "colors": {
+    "window": "#fdf6e3",
+    "base": "#fdf6e3",
+    "button": "#eee8d5",
+    "alternate_base": "#eee8d5",
+    "text": "#073642",
+    "muted": "#657b83",
+    "border": "#93a1a1",
+    "accent": "#2aa198",
+    "accent_text": "#002b36",
+    "link": "#268bd2",
+    "tooltip": "#eee8d5",
+    "tooltip_text": "#586e75",
+    "disabled_text": "#93a1a1",
+    "success": "#587600",
+    "warning": "#8a6600",
+    "error": "#b62422"
+  }
+}

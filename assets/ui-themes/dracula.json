@@ -1,0 +1,26 @@
+{
+  "format": "turing-ui-palette",
+  "version": 1,
+  "name": "Dracula",
+  "mode": "dark",
+  "order": 20,
+  "source": "https://github.com/dracula/dracula-theme",
+  "colors": {
+    "window": "#282a36",
+    "base": "#282a36",
+    "button": "#44475a",
+    "alternate_base": "#44475a",
+    "text": "#f8f8f2",
+    "muted": "#bd93f9",
+    "border": "#6272a4",
+    "accent": "#bd93f9",
+    "accent_text": "#282a36",
+    "link": "#8be9fd",
+    "tooltip": "#44475a",
+    "tooltip_text": "#f8f8f2",
+    "disabled_text": "#6272a4",
+    "success": "#50fa7b",
+    "warning": "#f1fa8c",
+    "error": "#ff5555"
+  }
+}

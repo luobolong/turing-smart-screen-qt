@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
-output="dist/turing-screen-qt-0.2.0-linux-x64"
+output="dist/turing-screen-qt-0.2.1-linux-x64"
 test ! -e "$output" || test "${1:-}" = --refresh || { echo 'Release directory already exists; use --refresh to update it' >&2; exit 1; }
 mkdir -p "$output/lib" "$output/plugins/platforms" "$output/plugins/imageformats" "$output/licenses"
 cp build/linux/turing-screen-qt "$output/"
 cp -au assets docs "$output/"
 cp README.md LICENSE THIRD_PARTY.md "$output/"
 cp LICENSE "$output/licenses/Qt-GPL-3.0.txt"
-for library in Qt6Core Qt6Gui Qt6Widgets Qt6Network Qt6DBus Qt6XcbQpa Qt6WaylandClient; do
+for library in Qt6Core Qt6Gui Qt6Widgets Qt6Network Qt6Svg Qt6DBus Qt6XcbQpa Qt6WaylandClient; do
     test ! -f "/usr/lib/lib$library.so.6" || cp -Lu "/usr/lib/lib$library.so.6" "$output/lib/"
 done
 for kind in wayland-shell-integration wayland-decoration-client wayland-graphics-integration-client wayland-windowmanager-integration tls networkinformation; do

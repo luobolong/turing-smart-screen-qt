@@ -1,0 +1,4 @@
+{
+  "light": {"success": "#2e7d32", "warning": "#9a6700", "error": "#c62828"},
+  "dark": {"success": "#8ccf8e", "warning": "#f1c76c", "error": "#ef8a8a"}
+}

@@ -150,7 +150,7 @@ theme = dict(format="turing-screen-qt", version=1, name="Nightfall",
              description="Compact English dashboard with system, calendar and IP-based weather.",
              landscape=True, orientation=2, background_color=rgba("background"),
              weather=dict(enabled=True, city=""), layers=[system, clock, weather, cpu, gpu, ram, net])
-target = ROOT / "assets/themes/nightfall.json"
+target = ROOT / "assets/themes/custom/nightfall.json"
 target.parent.mkdir(parents=True, exist_ok=True)
 target.write_text(json.dumps(theme, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 print(target)

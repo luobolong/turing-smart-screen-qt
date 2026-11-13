@@ -12,7 +12,7 @@
 
 stdenv.mkDerivation {
   pname = "turing-screen";
-  version = "0.2.0";
+  version = "0.2.1";
 
   src = lib.cleanSourceWith {
     src = ../.;
@@ -38,6 +38,7 @@ stdenv.mkDerivation {
   ];
   buildInputs = [
     qt6.qtbase
+    qt6.qtsvg
     qt6.qtwayland
     libpulseaudio
   ];

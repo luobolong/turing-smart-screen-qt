@@ -1,0 +1,26 @@
+{
+  "format": "turing-ui-palette",
+  "version": 1,
+  "name": "Solarized Dark",
+  "mode": "dark",
+  "order": 40,
+  "source": "https://github.com/altercation/solarized",
+  "colors": {
+    "window": "#002b36",
+    "base": "#002b36",
+    "button": "#073642",
+    "alternate_base": "#073642",
+    "text": "#93a1a1",
+    "muted": "#839496",
+    "border": "#586e75",
+    "accent": "#2aa198",
+    "accent_text": "#002b36",
+    "link": "#2aa198",
+    "tooltip": "#073642",
+    "tooltip_text": "#93a1a1",
+    "disabled_text": "#586e75",
+    "success": "#859900",
+    "warning": "#b58900",
+    "error": "#dc322f"
+  }
+}

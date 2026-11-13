@@ -271,6 +271,8 @@ void Device::connectPort(const QString &p, int direction, int light, bool mirror
     {
         QMutexLocker lock(&mutex);
         state.connecting = true;
+        state.connected = false;
+        state.port.clear();
     }
     Command c;
     c.kind = 1;
@@ -339,6 +341,7 @@ void Device::run() {
                     state.connected = true;
                     state.connecting = false;
                     state.message = c.port;
+                    state.port = c.port;
                     lock.unlock();
                     emit statusChanged();
                 } else if (c.kind == 2) {
@@ -349,6 +352,7 @@ void Device::run() {
                     state.connected = false;
                     state.connecting = false;
                     state.message = "Disconnected";
+                    state.port.clear();
                     lock.unlock();
                     emit statusChanged();
                 } else if (connected) {
@@ -376,6 +380,7 @@ void Device::run() {
                         connected = false;
                         QMutexLocker lock(&mutex);
                         state.connected = false;
+                        state.port.clear();
                         lock.unlock();
                         emit statusChanged();
                     } else if (c.kind == 8) {
@@ -411,6 +416,7 @@ void Device::run() {
             state.connected = false;
             state.connecting = false;
             state.message = QString::fromUtf8(e.what());
+            state.port.clear();
             lock.unlock();
             emit statusChanged();
         }

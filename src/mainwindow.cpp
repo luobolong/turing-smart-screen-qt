@@ -1,9 +1,13 @@
 #include "mainwindow.h"
+#include "uiappearance.h"
 #include <QBuffer>
 #include <QImageReader>
 #include <QJsonDocument>
 #include <QSaveFile>
 #include <QStorageInfo>
+#include <QMimeData>
+#include <QDrag>
+#include <QStandardItemModel>
 #include <QtWidgets>
 #include <algorithm>
 #include <cmath>
@@ -14,6 +18,95 @@
 #include <windows.h>
 #endif
 namespace Screen {
+namespace {
+constexpr int sidebarIconCenter = 22;
+constexpr int pageHeaderHeight = 64;
+// Keep the icon column fixed while only the space for labels changes.
+class SidebarButton : public QToolButton {
+    const int rowHeight;
+public:
+    explicit SidebarButton(int height) : rowHeight(height) { setFixedHeight(height); }
+    QSize sizeHint() const override { return QSize(44, rowHeight); }
+    QSize minimumSizeHint() const override { return sizeHint(); }
+protected:
+    void paintEvent(QPaintEvent *) override {
+        QStyleOptionToolButton option;
+        initStyleOption(&option);
+        const auto caption = option.text;
+        const auto image = option.icon;
+        option.text.clear();
+        option.icon = {};
+        QPainter painter(this);
+        painter.setFont(font());
+        style()->drawComplexControl(QStyle::CC_ToolButton, &option, &painter, this);
+        const QRect iconRect(sidebarIconCenter - iconSize().width() / 2, (height() - iconSize().height()) / 2,
+                             iconSize().width(), iconSize().height());
+        image.paint(&painter, iconRect, Qt::AlignCenter, isEnabled() ? QIcon::Normal : QIcon::Disabled);
+        if (toolButtonStyle() == Qt::ToolButtonTextBesideIcon)
+            style()->drawItemText(&painter, QRect(44, 0, qMax(0, width() - 48), height()),
+                                  Qt::AlignLeft | Qt::AlignVCenter | Qt::TextSingleLine,
+                                  option.palette, isEnabled(), caption, QPalette::ButtonText);
+    }
+};
+class NavigationDelegate : public QStyledItemDelegate {
+public:
+    using QStyledItemDelegate::QStyledItemDelegate;
+    void paint(QPainter *painter, const QStyleOptionViewItem &option, const QModelIndex &index) const override {
+        QStyleOptionViewItem item(option);
+        initStyleOption(&item, index);
+        const auto caption = item.text;
+        const auto image = item.icon;
+        item.text.clear();
+        item.icon = {};
+        const auto style = option.widget ? option.widget->style() : QApplication::style();
+        painter->save();
+        painter->setFont(item.font);
+        style->drawControl(QStyle::CE_ItemViewItem, &item, painter, option.widget);
+        image.paint(painter, QRect(sidebarIconCenter - 11, item.rect.center().y() - 11, 22, 22),
+                    Qt::AlignCenter, item.state & QStyle::State_Selected ? QIcon::Selected : QIcon::Normal);
+        style->drawItemText(painter, QRect(44, item.rect.top(), qMax(0, item.rect.right() - 48), item.rect.height()),
+                            Qt::AlignLeft | Qt::AlignVCenter | Qt::TextSingleLine, item.palette,
+                            item.state & QStyle::State_Enabled, caption,
+                            item.state & QStyle::State_Selected ? QPalette::HighlightedText : QPalette::Text);
+        painter->restore();
+    }
+};
+}
+class StatusLabel : public QLabel {
+    QString caption, tone;
+    void refreshStatus() {
+        const auto color = UiAppearance::instance().statusColor(tone);
+        setText("<span style=\"color:" + color.name() + "\">●</span> " + caption.toHtmlEscaped());
+    }
+public:
+    void setState(const QString &text, const QString &state) {
+        caption = text; tone = state;
+        setProperty("statusTone", state);
+        setAccessibleName(text);
+        refreshStatus();
+    }
+protected:
+    void changeEvent(QEvent *event) override {
+        QLabel::changeEvent(event);
+        if (event->type() == QEvent::PaletteChange || event->type() == QEvent::ApplicationPaletteChange || event->type() == QEvent::StyleChange) refreshStatus();
+    }
+};
+class PaletteLinkLabel : public QLabel {
+    QString original;
+    void refreshLinks() {
+        auto colored = original;
+        colored.replace("<a href=", "<a style=\"color:" + palette().color(QPalette::Link).name() + "\" href=");
+        QLabel::setText(colored);
+    }
+public:
+    explicit PaletteLinkLabel(const QString &text = {}) { setText(text); }
+    void setText(const QString &text) { original = text; refreshLinks(); }
+protected:
+    void changeEvent(QEvent *event) override {
+        QLabel::changeEvent(event);
+        if (event->type() == QEvent::PaletteChange || event->type() == QEvent::ApplicationPaletteChange) refreshLinks();
+    }
+};
 QString MainWindow::L(const char *zh, const char *en) const {
     return QString::fromUtf8(english ? en : zh);
 }
@@ -27,6 +120,18 @@ static QLabel *label(const QString &text, QLayout *layout) {
     auto l = new QLabel(text);
     layout->addWidget(l);
     return l;
+}
+static QLabel *heading(const QString &text, QLayout *layout) {
+    auto result = label(text, layout);
+    result->setProperty("uiRole", "heading");
+    return result;
+}
+static void uiRole(QWidget *widget, const QString &role) {
+    if (widget->property("uiRole").toString() == role) return;
+    widget->setProperty("uiRole", role);
+    widget->style()->unpolish(widget);
+    widget->style()->polish(widget);
+    widget->update();
 }
 static QString fileIdentity(const QString &file) {
     const auto canonical = QFileInfo(file).canonicalFilePath();
@@ -47,33 +152,6 @@ static bool storeConfig(const QString &directory, const QJsonObject &config, QSt
     }
     return true;
 }
-class PaneSplitterHandle : public QSplitterHandle {
-    QFrame *separator;
-    void updateSeparator() {
-        separator->setFrameShape(orientation() == Qt::Horizontal ? QFrame::VLine : QFrame::HLine);
-        separator->setGeometry(rect());
-    }
-public:
-    PaneSplitterHandle(Qt::Orientation orientation, QSplitter *parent)
-        : QSplitterHandle(orientation, parent), separator(new QFrame(this)) {
-        separator->setObjectName("paneSeparator");
-        separator->setFrameShadow(QFrame::Plain);
-        separator->setLineWidth(1);
-        separator->setAttribute(Qt::WA_TransparentForMouseEvents);
-        updateSeparator();
-    }
-protected:
-    void resizeEvent(QResizeEvent *event) override {
-        QSplitterHandle::resizeEvent(event);
-        updateSeparator();
-    }
-};
-class PaneSplitter : public QSplitter {
-public:
-    explicit PaneSplitter(QWidget *parent = nullptr) : QSplitter(parent) { setHandleWidth(7); }
-protected:
-    QSplitterHandle *createHandle() override { return new PaneSplitterHandle(orientation(), this); }
-};
 class LayerTree : public QTreeWidget {
 public:
     std::function<void(QStringList, QString, int)> dropped;
@@ -108,6 +186,49 @@ protected:
         e->acceptProposedAction();
     }
 };
+static void dragLibraryPath(QWidget *widget, const QString &path) {
+    if (path.isEmpty()) return;
+    auto data = new QMimeData;
+    data->setUrls({QUrl::fromLocalFile(path)});
+    auto drag = new QDrag(widget);
+    drag->setMimeData(data);
+    drag->exec(Qt::CopyAction | Qt::MoveAction, Qt::MoveAction);
+}
+class ThemeFolders : public QTreeWidget {
+public:
+    std::function<void(QString, QString, bool)> dropped;
+protected:
+    void startDrag(Qt::DropActions) override {
+        if (currentItem()) dragLibraryPath(this, currentItem()->data(0, Qt::UserRole).toString());
+    }
+    void dragEnterEvent(QDragEnterEvent *event) override {
+        if (event->mimeData()->hasUrls()) event->acceptProposedAction();
+    }
+    void dragMoveEvent(QDragMoveEvent *event) override {
+        if (event->mimeData()->hasUrls() && itemAt(event->position().toPoint())) event->acceptProposedAction();
+    }
+    void dropEvent(QDropEvent *event) override {
+        const auto item = itemAt(event->position().toPoint());
+        if (!item || !event->mimeData()->hasUrls()) return;
+        auto target = item->data(0, Qt::UserRole).toString();
+        if (item->data(0, Qt::UserRole + 1).toString() != "folder") target = item->parent() ? item->parent()->data(0, Qt::UserRole).toString() : QString();
+        for (const auto &url : event->mimeData()->urls())
+            if (url.isLocalFile() && dropped) dropped(url.toLocalFile(), target, event->modifiers() & Qt::ControlModifier);
+        event->acceptProposedAction();
+    }
+};
+class ThemeCatalogDelegate : public QStyledItemDelegate {
+public:
+    explicit ThemeCatalogDelegate(QObject *parent) : QStyledItemDelegate(parent) {}
+    QSize sizeHint(const QStyleOptionViewItem &, const QModelIndex &index) const override {
+        return QSize(220, index.data(Qt::UserRole + 1).toString() == "folder" ? 32 : 80);
+    }
+protected:
+    void initStyleOption(QStyleOptionViewItem *option, const QModelIndex &index) const override {
+        QStyledItemDelegate::initStyleOption(option, index);
+        if (index.data(Qt::UserRole + 1).toString() == "folder") option->decorationSize = QSize(20, 20);
+    }
+};
 MainWindow::MainWindow(QString dir, QString initial, QWidget *parent, std::shared_ptr<StartupBackend> startupBackend)
     : MainWindow(std::make_shared<DisplayRuntime>(std::move(dir), initial), parent, std::move(startupBackend)) {}
 MainWindow::MainWindow(std::shared_ptr<DisplayRuntime> session, QWidget *parent, std::shared_ptr<StartupBackend> startupBackend)
@@ -120,15 +241,21 @@ MainWindow::MainWindow(std::shared_ptr<DisplayRuntime> session, QWidget *parent,
               (config.value("language").toString("auto") == "auto" &&
                QLocale::system().language() != QLocale::Chinese);
     startup = std::make_unique<StartupController>(startupBackend ? std::move(startupBackend) : nativeStartupBackend(dataDir));
+    setWindowIcon(applicationIcon());
     connect(startup.get(), &StartupController::changed, this, &MainWindow::updateStartupUi);
     saved = theme.data;
+    auto &appearance = UiAppearance::instance();
+    uiThemeError = appearance.apply(config["ui_theme"].toString("system"), dataDir);
+    if (!uiThemeError.isEmpty()) appearance.apply("system", dataDir);
     reloadLibrary();
     if (!path.isEmpty()) includeTheme(path);
     resourceTrace("catalog loaded");
     renderTimer.setSingleShot(true);
     connect(&renderTimer, &QTimer::timeout, this, &MainWindow::render);
     connect(runtime.get(), &DisplayRuntime::updated, this, &MainWindow::refreshRuntimeUi);
+    connect(runtime.get(), &DisplayRuntime::weatherStatusChanged, this, &MainWindow::updateWeatherStatus);
     build();
+    connect(&device, &Device::statusChanged, this, &MainWindow::updateStatus, Qt::QueuedConnection);
     resourceTrace("UI built");
     render();
     resourceTrace("rendered");
@@ -138,33 +265,49 @@ MainWindow::MainWindow(std::shared_ptr<DisplayRuntime> session, QWidget *parent,
 }
 MainWindow::~MainWindow() {
     runtime->preview = false;
+    runtime->allMetrics = false;
+    runtime->weatherSettingsVisible = false;
+    runtime->configureWeather();
     persist();
 }
 void MainWindow::showEvent(QShowEvent *event) {
     QMainWindow::showEvent(event);
     runtime->preview = page == LibraryPage || page == EditorPage;
+    runtime->allMetrics = page == SensorsPage;
+    runtime->weatherSettingsVisible = page == SettingsPage;
+    runtime->configureWeather();
     updateResponsiveLayout();
+    updateSensorColumns();
     QTimer::singleShot(0, this, &MainWindow::thumbnails);
     emit windowOpened();
 }
 void MainWindow::hideEvent(QHideEvent *event) {
     QMainWindow::hideEvent(event);
     runtime->preview = false;
+    runtime->allMetrics = false;
+    runtime->weatherSettingsVisible = false;
+    runtime->configureWeather();
 }
 void MainWindow::resizeEvent(QResizeEvent *event) {
     QMainWindow::resizeEvent(event);
-    if ((event->oldSize().width() < 900) != (width() < 900))
-        setSidebarExpanded(width() >= 900 && config.value("sidebar_expanded").toBool(false));
+    if ((event->oldSize().width() < 800) != (width() < 800))
+        setSidebarExpanded(width() >= 800 && config.value("sidebar_expanded").toBool(false));
     updateResponsiveLayout();
 }
 bool MainWindow::eventFilter(QObject *watched, QEvent *event) {
     if ((watched == pages || (library && watched == library->viewport())) && event->type() == QEvent::Resize)
         QTimer::singleShot(0, this, &MainWindow::updateResponsiveLayout);
+    if (sensorTable && ((watched == sensorTable->viewport() && event->type() == QEvent::Resize) ||
+                        (watched == sensorTable && event->type() == QEvent::Show))) {
+        auto table = sensorTable;
+        QTimer::singleShot(0, table, [this, table] { if (table == sensorTable) updateSensorColumns(); });
+    }
     return QMainWindow::eventFilter(watched, event);
 }
 void MainWindow::build() {
     building = true;
     const auto filter = search ? search->text() : QString();
+    const bool searchShown = librarySearchPanel && !librarySearchPanel->isHidden();
     const auto selected = selection();
     const int inspectorPage = inspectorTabs ? inspectorTabs->currentIndex() : 0;
     auto old = takeCentralWidget();
@@ -172,67 +315,27 @@ void MainWindow::build() {
         old->deleteLater();
     root = new QWidget;
     root->setObjectName("root");
-    auto windowLayout = new QVBoxLayout(root);
-    windowLayout->setContentsMargins(0, 0, 0, 0);
-    windowLayout->setSpacing(0);
-    titleBar = new QWidget;
-    titleBar->setObjectName("titleBar");
-    auto header = new QHBoxLayout(titleBar);
-    header->setContentsMargins(12, 8, 16, 8);
-    header->setSpacing(12);
-    sidebarToggle = new QToolButton;
-    sidebarToggle->setObjectName("sidebarToggle");
-    sidebarToggle->setAutoRaise(true);
-    sidebarToggle->setMinimumSize(32, 32);
-    header->addWidget(sidebarToggle);
-    pageTitle = label({}, header);
-    pageTitle->setObjectName("pageTitle");
-    title = label({}, header);
-    title->setMinimumWidth(0);
-    title->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
-    header->setStretch(header->count() - 1, 1);
-    resolution = label({}, header);
-    modeButton = button({}, header, [this] { setEditing(page != EditorPage); });
-    modeButton->setObjectName("editThemeButton");
-    saveButton = button(L("保存主题", "Save theme"), header, [this] { saveTheme(); });
-    saveButton->setObjectName("saveThemeButton");
-    windowLayout->addWidget(titleBar);
-    auto divider = new QFrame;
-    divider->setFrameShape(QFrame::HLine);
-    divider->setFrameShadow(QFrame::Plain);
-    divider->setLineWidth(1);
-    windowLayout->addWidget(divider);
-    connect(sidebarToggle, &QToolButton::clicked, this, [this] {
-        setSidebarExpanded(!sidebarExpanded);
-        config["sidebar_expanded"] = sidebarExpanded;
-        persist();
-        updateResponsiveLayout();
-    });
-    auto body = new QWidget;
-    auto shell = new QHBoxLayout(body);
+    auto shell = new QHBoxLayout(root);
     shell->setContentsMargins(0, 0, 0, 0);
     shell->setSpacing(0);
-    windowLayout->addWidget(body, 1);
     auto sidebarFrame = new QFrame;
     sidebarFrame->setFrameShape(QFrame::NoFrame);
     sidebar = sidebarFrame;
     sidebar->setObjectName("sidebar");
     auto sideLayout = new QVBoxLayout(sidebar);
-    sideLayout->setContentsMargins(8, 12, 8, 12);
-    const auto sideAction = [&](const QString &text, QStyle::StandardPixmap icon, const char *name,
-                                const std::function<void()> &action) {
-        auto tool = new QToolButton;
-        tool->setObjectName(name);
-        tool->setText(text);
-        tool->setToolTip(text);
-        tool->setAccessibleName(text);
-        tool->setIcon(style()->standardIcon(icon));
-        tool->setAutoRaise(true);
-        tool->setMinimumHeight(40);
-        tool->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-        sideLayout->addWidget(tool);
-        connect(tool, &QToolButton::clicked, this, action);
-    };
+    sideLayout->setContentsMargins(8, 0, 8, 12);
+    sideLayout->setSpacing(6);
+    sidebarBrand = new SidebarButton(pageHeaderHeight);
+    sidebarBrand->setObjectName("sidebarBrand");
+    sidebarBrand->setAutoRaise(true);
+    sidebarBrand->setFixedHeight(pageHeaderHeight);
+    sidebarBrand->setIcon(applicationIcon());
+    sidebarBrand->setIconSize(QSize(32, 32));
+    sidebarBrand->setText(L("图灵智显", "Turing Screen"));
+    sidebarBrand->setToolTip(sidebarBrand->text());
+    sidebarBrand->setAccessibleName(sidebarBrand->text());
+    sidebarBrand->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    sideLayout->addWidget(sidebarBrand);
     navigation = new QListWidget;
     navigation->setObjectName("navigation");
     navigation->setAccessibleName(L("功能导航", "Navigation"));
@@ -242,39 +345,89 @@ void MainWindow::build() {
     navigation->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     navigation->setIconSize(QSize(22, 22));
     navigation->setSpacing(3);
+    navigation->setItemDelegate(new NavigationDelegate(navigation));
     const QStringList names{L("主题预览", "Theme preview"), L("主题编辑器", "Theme editor"),
-                            L("传感器", "Sensors"), L("设置", "Settings"),
-                            L("诊断", "Diagnostics")};
-    const QStyle::StandardPixmap icons[]{QStyle::SP_DirIcon, QStyle::SP_FileDialogContentsView,
-        QStyle::SP_DriveHDIcon, QStyle::SP_FileDialogDetailedView,
-        QStyle::SP_MessageBoxInformation};
+                            L("传感器", "Sensors"), L("设置", "Settings")};
+    const UiIcon icons[]{UiIcon::Preview, UiIcon::Edit, UiIcon::Sensors, UiIcon::Settings};
     for (int n = 0; n < PageCount; ++n) {
-        auto item = new QListWidgetItem(style()->standardIcon(icons[n]), names[n], navigation);
+        auto item = new QListWidgetItem(uiIcon(icons[n]), names[n], navigation);
         item->setData(Qt::UserRole, names[n]);
         item->setData(Qt::AccessibleTextRole, names[n]);
         item->setToolTip(names[n]);
         item->setSizeHint(QSize(40, 44));
     }
     sideLayout->addWidget(navigation, 1);
-    sideAction(L("轻量模式", "Lightweight mode"), QStyle::SP_TitleBarMinButton, "sidebarLightweight",
-               [this] { emit lightweightRequested(); });
+    auto lightweight = new SidebarButton(44);
+    lightweight->setObjectName("sidebarLightweight");
+    lightweight->setText(L("轻量模式", "Lightweight Mode"));
+    lightweight->setIcon(uiIcon(UiIcon::Lightweight));
+    lightweight->setIconSize(QSize(22, 22));
+    lightweight->setToolTip(L("进入轻量模式", "Enter lightweight mode"));
+    lightweight->setAccessibleName(lightweight->toolTip());
+    lightweight->setAutoRaise(true);
+    lightweight->setFixedHeight(44);
+    lightweight->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    sideLayout->addWidget(lightweight);
+    connect(lightweight, &QToolButton::clicked, this, &MainWindow::lightweightRequested);
+    sidebarToggle = new SidebarButton(36);
+    sidebarToggle->setObjectName("sidebarToggle");
+    sidebarToggle->setAutoRaise(true);
+    sidebarToggle->setFixedHeight(36);
+    sidebarToggle->setIconSize(QSize(22, 22));
+    sidebarToggle->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    sideLayout->addWidget(sidebarToggle);
+    const auto toggleSidebar = [this] {
+        setSidebarExpanded(!sidebarExpanded);
+        config["sidebar_expanded"] = sidebarExpanded;
+        persist();
+        updateResponsiveLayout();
+    };
+    connect(sidebarToggle, &QToolButton::clicked, this, toggleSidebar);
+    connect(sidebarBrand, &QToolButton::clicked, this, toggleSidebar);
     shell->addWidget(sidebar);
     auto sidebarSeparator = new QFrame;
     sidebarSeparator->setObjectName("sidebarSeparator");
     sidebarSeparator->setFrameShape(QFrame::VLine);
     sidebarSeparator->setFrameShadow(QFrame::Plain);
     sidebarSeparator->setLineWidth(1);
+    sidebarSeparator->setForegroundRole(QPalette::Mid);
     sidebarSeparator->setFixedWidth(1);
     shell->addWidget(sidebarSeparator);
     auto content = new QWidget;
     content->setObjectName("mainContent");
-    auto outer = new QVBoxLayout(content);
-    outer->setContentsMargins(20, 16, 20, 12);
-    outer->setSpacing(12);
+    auto contentLayout = new QVBoxLayout(content);
+    contentLayout->setContentsMargins(0, 0, 0, 0);
+    contentLayout->setSpacing(0);
+    titleBar = new QWidget;
+    titleBar->setObjectName("titleBar");
+    titleBar->setFixedHeight(pageHeaderHeight);
+    auto header = new QHBoxLayout(titleBar);
+    header->setContentsMargins(20, 12, 20, 12);
+    pageTitle = label({}, header);
+    pageTitle->setObjectName("pageTitle");
+    header->addStretch();
+    resolution = label({}, header);
+    resolution->setProperty("uiRole", "caption");
+    modeButton = button({}, header, [this] { setEditing(page != EditorPage); });
+    modeButton->setObjectName("editThemeButton");
+    saveButton = button(L("保存主题", "Save theme"), header, [this] { saveTheme(); });
+    saveButton->setObjectName("saveThemeButton");
+    saveButton->setProperty("uiRole", "primary");
+    contentLayout->addWidget(titleBar);
+    auto divider = new QFrame;
+    divider->setFrameShape(QFrame::HLine);
+    divider->setFrameShadow(QFrame::Plain);
+    divider->setLineWidth(1);
+    divider->setForegroundRole(QPalette::Mid);
+    contentLayout->addWidget(divider);
+    auto pageContainer = new QWidget;
+    auto outer = new QVBoxLayout(pageContainer);
+    outer->setContentsMargins(16, 16, 16, 12);
     pages = new QStackedWidget;
     pages->setObjectName("pages");
     pages->installEventFilter(this);
     outer->addWidget(pages, 1);
+    contentLayout->addWidget(pageContainer, 1);
     auto t = new QWidget;
     pages->addWidget(t);
     buildLibraryPage(t);
@@ -287,9 +440,6 @@ void MainWindow::build() {
     auto settings = new QWidget;
     pages->addWidget(settings);
     buildSettings(settings);
-    auto diag = new QWidget;
-    pages->addWidget(diag);
-    buildDiagnostics(diag);
     shell->addWidget(content, 1);
     setCentralWidget(root);
     statusBar()->clearMessage();
@@ -297,11 +447,11 @@ void MainWindow::build() {
         statusBar()->removeWidget(l);
         l->deleteLater();
     }
-    dataState = new QLabel;
+    dataState = new StatusLabel;
     dataState->setObjectName("statusPart");
-    connection = new QLabel;
+    connection = new StatusLabel;
     connection->setObjectName("statusPart");
-    sendState = new QLabel;
+    sendState = new StatusLabel;
     sendState->setObjectName("statusPart");
     status = new QLabel;
     status->setObjectName("statusPart");
@@ -310,14 +460,10 @@ void MainWindow::build() {
         part->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred);
     }
     status->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
-    statusBar()->addWidget(dataState);
+    statusBar()->addPermanentWidget(dataState);
     statusBar()->addWidget(status, 1);
     statusBar()->addPermanentWidget(connection);
     statusBar()->addPermanentWidget(sendState);
-    auto quitButton = new QPushButton(L("退出", "Exit"));
-    quitButton->setObjectName("statusPart");
-    statusBar()->addPermanentWidget(quitButton);
-    connect(quitButton, &QPushButton::clicked, this, &MainWindow::quit);
     connect(navigation, &QListWidget::currentRowChanged, this, &MainWindow::setPage);
     navigation->setCurrentRow(page);
     pages->setCurrentIndex(page);
@@ -338,8 +484,11 @@ void MainWindow::build() {
     shortcut(QKeySequence::Undo, [this] { if (page == EditorPage) undo(); });
     shortcut(QKeySequence::Redo, [this] { if (page == EditorPage) redo(); });
     shortcut(QKeySequence(Qt::Key_F2), [this] {
-        if (editing && page == EditorPage)
-            rename();
+        if (page == LibraryPage) {
+            const auto file = folderTree->hasFocus() && folderTree->currentItem() ? folderTree->currentItem()->data(0, Qt::UserRole).toString()
+                : library->currentItem() ? library->currentItem()->data(0, Qt::UserRole).toString() : QString();
+            renameLibraryItem(file);
+        } else if (editing && page == EditorPage) rename();
     });
     const QList<QPair<QKeySequence, QString>> shortcuts{
         {QKeySequence::Copy, "copy"},
@@ -351,21 +500,31 @@ void MainWindow::build() {
         {QKeySequence(Qt::Key_Delete), "delete"}};
     for (auto pair : shortcuts)
         shortcut(pair.first, [this, pair] {
+            if (page == LibraryPage && (library->hasFocus() || folderTree->hasFocus())) {
+                const auto file = folderTree->hasFocus() && folderTree->currentItem() ? folderTree->currentItem()->data(0, Qt::UserRole).toString()
+                    : library->currentItem() ? library->currentItem()->data(0, Qt::UserRole).toString() : QString();
+                if (pair.second == "delete") deleteTheme(file, runtime->library.recycled(file));
+                else if (pair.second == "copy" || pair.second == "cut") { fileClipboard = file; fileCut = pair.second == "cut"; }
+                else if (pair.second == "paste" && !fileClipboard.isEmpty()) transferLibraryItem(fileClipboard, targetLibraryFolder(), !fileCut);
+                return;
+            }
             if (page == EditorPage && editing && !qobject_cast<QLineEdit *>(QApplication::focusWidget()))
                 layerAction(pair.second);
         });
     shortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_N), [this] {
-        if (page == EditorPage)
-            createLayer("text");
+        if (page == EditorPage) createLayer("text");
+        else if (page == LibraryPage) newLibraryFolder();
     });
+    shortcut(QKeySequence(Qt::Key_F5), [this] { if (page == LibraryPage) { reloadLibrary(); buildLibrary(); } });
     buildLibrary();
     buildTree();
     search->setText(filter);
+    findChild<QToolButton *>("libraryToggleSearch")->setChecked(searchShown);
     selection(selected);
     inspectorTabs->setCurrentIndex(inspectorPage);
     emit preferencesChanged();
     building = false;
-    setSidebarExpanded(width() >= 900 && config.value("sidebar_expanded").toBool(false));
+    setSidebarExpanded(width() >= 800 && config.value("sidebar_expanded").toBool(false));
     setPage(page);
     updateResponsiveLayout();
     updateStatus();
@@ -374,92 +533,161 @@ void MainWindow::build() {
 void MainWindow::buildLibraryPage(QWidget *w) {
     auto layout = new QVBoxLayout(w);
     layout->setContentsMargins(0, 0, 0, 0);
-    auto bar = new QHBoxLayout;
+    librarySplit = new PaneSplitter;
+    librarySplit->setObjectName("librarySplit");
+    librarySplit->showPaneText = L("展开%1", "Show %1");
+    librarySplit->hidePaneText = L("收起%1", "Hide %1");
+    auto browserPanel = new QWidget;
+    libraryBrowser = browserPanel;
+    browserPanel->setObjectName("libraryBrowser");
+    auto browserLayout = new QVBoxLayout(browserPanel);
+    browserLayout->setContentsMargins(0, 0, 0, 0);
+    browserLayout->setSpacing(6);
+    auto tools = new QWidget;
+    tools->setObjectName("libraryTools");
+    auto bar = new QHBoxLayout(tools);
+    bar->setContentsMargins(0, 0, 0, 0);
+    bar->setSpacing(2);
+    const auto tool = [&](UiIcon icon, const char *name, const QString &caption) {
+        auto result = new QToolButton;
+        result->setObjectName(name);
+        result->setIcon(uiIcon(icon));
+        result->setIconSize(QSize(18, 18));
+        result->setToolTip(caption);
+        result->setAccessibleName(caption);
+        bar->addWidget(result);
+        return result;
+    };
+    auto toggleSearch = tool(UiIcon::Search, "libraryToggleSearch", L("搜索主题", "Search themes"));
+    toggleSearch->setCheckable(true);
+    auto create = tool(UiIcon::Add, "libraryNew", L("新建", "New"));
+    create->setPopupMode(QToolButton::InstantPopup);
+    auto createMenu = new QMenu(create);
+    createMenu->setObjectName("libraryNewMenu");
+    createMenu->addAction(L("新建主题", "New theme"), this, &MainWindow::newTheme)->setObjectName("newTheme");
+    createMenu->addAction(L("新建文件夹", "New folder"), this, [this] { newLibraryFolder(); })->setObjectName("newThemeFolder");
+    create->setMenu(createMenu);
+    auto import = tool(UiIcon::Import, "libraryImport", L("导入主题", "Import theme"));
+    connect(import, &QToolButton::clicked, this, &MainWindow::importTheme);
+    auto locate = tool(UiIcon::Locate, "libraryLocate", L("定位当前主题", "Locate current theme"));
+    connect(locate, &QToolButton::clicked, this, &MainWindow::selectOpenedTheme);
+    auto expand = tool(UiIcon::Expand, "libraryExpandSelected", L("展开所选文件夹", "Expand selected folder"));
+    connect(expand, &QToolButton::clicked, this, &MainWindow::expandSelectedThemeFolder);
+    auto collapse = tool(UiIcon::Collapse, "libraryCollapseAll", L("收起所有文件夹", "Collapse all folders"));
+    auto hide = tool(UiIcon::Hide, "libraryHide", L("隐藏主题库", "Hide theme library"));
+    connect(hide, &QToolButton::clicked, this, [this] { librarySplit->setPaneCollapsed(0, true); });
+    bar->addStretch();
+    browserLayout->addWidget(tools);
+    librarySearchPanel = new QWidget;
+    librarySearchPanel->setObjectName("librarySearchPanel");
+    auto searchRow = new QHBoxLayout(librarySearchPanel);
+    searchRow->setContentsMargins(0, 0, 0, 0);
+    searchRow->setSpacing(4);
     search = new QLineEdit;
     search->setObjectName("themeSearch");
     search->setClearButtonEnabled(true);
     search->setPlaceholderText(L("搜索主题", "Search themes"));
-    search->setMinimumWidth(100);
-    bar->addWidget(search, 1);
-    button(L("新建", "New"), bar, [this] { newTheme(); });
-    button(L("导入", "Import"), bar, [this] { importTheme(); });
-    deleteThemeButton = button(L("删除", "Delete"), bar, [this] { deleteTheme(path); });
-    deleteThemeButton->setObjectName("deleteThemeButton");
-    layout->addLayout(bar);
+    search->setMinimumWidth(0);
+    searchRow->addWidget(search, 1);
+    connect(search, &QLineEdit::textChanged, this, &MainWindow::searchLibrary);
+    connect(search, &QLineEdit::returnPressed, this, &MainWindow::searchLibrary);
+    browserLayout->addWidget(librarySearchPanel);
+    librarySearchPanel->hide();
+    connect(toggleSearch, &QToolButton::toggled, this, [this](bool shown) {
+        librarySearchPanel->setVisible(shown);
+        if (shown) search->setFocus();
+    });
     libraryEmpty = new QLabel(L("没有找到匹配的主题，请尝试其他关键词。", "No matching themes. Try another search."));
     libraryEmpty->setWordWrap(true);
     libraryEmpty->hide();
-    layout->addWidget(libraryEmpty);
-    librarySplit = new PaneSplitter;
-    librarySplit->setObjectName("librarySplit");
-    librarySplit->setChildrenCollapsible(false);
-    library = new QListWidget;
-    library->setObjectName("themeLibrary");
-    library->viewport()->installEventFilter(this);
-    library->setViewMode(QListView::ListMode);
-    library->setFlow(QListView::TopToBottom);
-    library->setResizeMode(QListView::Adjust);
-    library->setMovement(QListView::Static);
-    library->setWrapping(false);
-    library->setWordWrap(true);
-    library->setIconSize(QSize(88, 60));
-    library->setSpacing(4);
-    library->setUniformItemSizes(true);
-    library->setFrameShape(QFrame::NoFrame);
-    library->setMinimumSize(200, 80);
-    library->setToolTip(L("选择主题可预览；双击主题进入编辑器。", "Select a theme to preview. Double-click to edit."));
-    library->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    library->setContextMenuPolicy(Qt::CustomContextMenu);
-    librarySplit->addWidget(library);
+    browserLayout->addWidget(libraryEmpty);
+    auto browser = new ThemeFolders;
+    library = browser;
+    folderTree = browser;
+    browser->setObjectName("themeLibrary");
+    browser->setItemDelegate(new ThemeCatalogDelegate(browser));
+    browser->setHeaderHidden(true);
+    browser->setMinimumSize(240, 80);
+    browser->setIndentation(16);
+    browser->setIconSize(QSize(88, 60));
+    browser->setWordWrap(false);
+    browser->setTextElideMode(Qt::ElideRight);
+    browser->setFrameShape(QFrame::NoFrame);
+    browser->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    browser->setContextMenuPolicy(Qt::CustomContextMenu);
+    browser->setDragEnabled(true);
+    browser->setAcceptDrops(true);
+    browser->setDragDropMode(QAbstractItemView::DragDrop);
+    browser->viewport()->installEventFilter(this);
+    browser->dropped = [this](QString file, QString folder, bool copy) { transferLibraryItem(file, folder, copy); };
+    browserLayout->addWidget(browser, 1);
+    librarySplit->addWidget(browserPanel);
+    connect(collapse, &QToolButton::clicked, library, &QTreeWidget::collapseAll);
     auto preview = new QWidget;
     auto previewLayout = new QVBoxLayout(preview);
     previewLayout->setContentsMargins(12, 0, 0, 0);
-    label(L("当前主题", "Current theme"), previewLayout);
+    auto themeHeader = new QHBoxLayout;
+    title = heading({}, themeHeader);
+    title->setObjectName("previewThemeTitle");
+    title->setMinimumWidth(0);
+    title->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred);
+    auto renameTheme = new QToolButton;
+    renameTheme->setObjectName("renamePreviewTheme");
+    renameTheme->setIcon(uiIcon(UiIcon::Edit));
+    renameTheme->setToolTip(L("重命名主题", "Rename theme"));
+    renameTheme->setAccessibleName(renameTheme->toolTip());
+    themeHeader->addWidget(renameTheme);
+    themeHeader->addStretch();
+    connect(renameTheme, &QToolButton::clicked, this, [this] { renameLibraryItem(path); });
+    previewLayout->addLayout(themeHeader);
     previewCanvas = new Canvas;
     previewCanvas->setObjectName("previewCanvas");
     previewCanvas->theme = &theme;
     previewCanvas->setMinimumSize(200, 160);
     previewLayout->addWidget(previewCanvas, 1);
-    preview->setMinimumWidth(220);
+    auto previewBottom = new QHBoxLayout;
+    previewBottom->addStretch();
+    previewBottom->addWidget(zoomControls(previewCanvas, "preview"));
+    previewLayout->addLayout(previewBottom);
+    preview->setMinimumWidth(200);
     librarySplit->addWidget(preview);
     devicePanel = new QWidget;
     devicePanel->setObjectName("devicePanel");
-    devicePanel->setMinimumSize(240, 80);
+    devicePanel->setMinimumSize(200, 80);
     buildDevicePanel(devicePanel);
     librarySplit->addWidget(devicePanel);
     librarySplit->setStretchFactor(0, 0);
     librarySplit->setStretchFactor(1, 1);
     librarySplit->setStretchFactor(2, 0);
-    librarySplit->setSizes({250, 650, 280});
+    librarySplit->setSizes({300, 540, 240});
+    librarySplit->addCollapsiblePane(0, L("主题库", "theme library"), config["library_pane_hidden"].toBool());
+    librarySplit->addCollapsiblePane(2, L("设备面板", "device panel"), config["device_pane_hidden"].toBool());
+    librarySplit->collapsedChanged = [this](int index, bool collapsed) {
+        config[index == 0 ? "library_pane_hidden" : "device_pane_hidden"] = collapsed;
+        persist();
+    };
     layout->addWidget(librarySplit, 1);
-    connect(search, &QLineEdit::textChanged, this, [this](const QString &s) {
-        int matches = 0;
-        for (int n = 0; n < library->count(); ++n)
-            if (auto item = library->item(n)) {
-                const bool match = item->text().contains(s, Qt::CaseInsensitive);
-                item->setHidden(!match);
-                matches += match;
-            }
-        libraryEmpty->setVisible(matches == 0);
-        thumbnails();
-    });
-    connect(library, &QListWidget::currentItemChanged, this, [this](QListWidgetItem *item) {
-        if (item && !building)
-            choose(item->data(Qt::UserRole).toString());
+    connect(library, &QTreeWidget::currentItemChanged, this, [this](QTreeWidgetItem *item) {
+        if (!item || building) return;
+        const auto file = item->data(0, Qt::UserRole).toString();
+        if (item->data(0, Qt::UserRole + 1).toString() == "folder") {
+            libraryFolder = file;
+            config["theme_folder"] = QDir(runtime->library.root).relativeFilePath(file);
+            persist();
+        } else {
+            libraryFolder = item->parent() ? item->parent()->data(0, Qt::UserRole).toString() : runtime->library.root;
+            choose(file);
+        }
     });
     connect(library->verticalScrollBar(), &QScrollBar::valueChanged, this, [this] { thumbnails(); });
-    connect(library, &QListWidget::customContextMenuRequested, this, [this](QPoint position) {
-        QMenu menu(library);
-        if (const auto item = library->itemAt(position)) {
-            const auto file = item->data(Qt::UserRole).toString();
-            auto remove = menu.addAction(L("删除主题", "Delete theme"), this, [this, file] { deleteTheme(file); });
-            remove->setEnabled(!file.isEmpty());
-            menu.addSeparator();
-        }
-        menu.addAction(L("恢复内置主题", "Restore built-in themes"), this, &MainWindow::restoreBuiltinThemes);
-        menu.exec(library->viewport()->mapToGlobal(position));
+    connect(library, &QTreeWidget::itemExpanded, this, [this] { QTimer::singleShot(0, this, &MainWindow::thumbnails); });
+    connect(library, &QTreeWidget::customContextMenuRequested, this, [this](QPoint position) {
+        const auto item = library->itemAt(position);
+        libraryMenu(item ? item->data(0, Qt::UserRole).toString() : QString(), library->viewport()->mapToGlobal(position));
     });
-    connect(library, &QListWidget::itemDoubleClicked, this, [this] { setEditing(true); });
+    connect(library, &QTreeWidget::itemDoubleClicked, this, [this](QTreeWidgetItem *item) {
+        if (item && item->data(0, Qt::UserRole + 1).toString() != "folder" && !runtime->library.recycled(item->data(0, Qt::UserRole).toString())) setEditing(true);
+    });
 }
 void MainWindow::buildEditorPage(QWidget *w) {
     auto layout = new QVBoxLayout(w);
@@ -477,47 +705,67 @@ void MainWindow::buildEditorPage(QWidget *w) {
                                                  {"line", L("直线", "Line")}})
         toolBox->addItem(p.second, p.first);
     tools->addWidget(toolBox);
-    undoAction = tools->addAction(style()->standardIcon(QStyle::SP_ArrowBack), L("撤销", "Undo"), this, &MainWindow::undo);
-    redoAction = tools->addAction(style()->standardIcon(QStyle::SP_ArrowForward), L("重做", "Redo"), this, &MainWindow::redo);
-    tools->addSeparator();
-    tools->addAction(L("适应窗口", "Fit"), this, [this] { canvas->setFit(true); });
-    tools->addAction("1:1", this, [this] { canvas->setZoom(1); });
-    tools->addAction("−", this, [this] { canvas->setZoom(canvas->zoom() / 1.2); });
-    tools->addAction("+", this, [this] { canvas->setZoom(canvas->zoom() * 1.2); });
+    undoAction = tools->addAction(uiIcon(UiIcon::Undo), L("撤销", "Undo"), this, &MainWindow::undo);
+    redoAction = tools->addAction(uiIcon(UiIcon::Redo), L("重做", "Redo"), this, &MainWindow::redo);
     tools->addSeparator();
     auto themeOptions = new QToolButton;
+    themeOptions->setObjectName("themeOptions");
     themeOptions->setText(L("主题选项", "Theme options"));
     themeOptions->setPopupMode(QToolButton::InstantPopup);
     tools->addWidget(themeOptions);
     auto themeMenu = new QMenu(themeOptions);
+    themeMenu->setObjectName("themeOptionsMenu");
     themeOptions->setMenu(themeMenu);
     themeMenu->addAction(L("重命名主题", "Rename theme"), this, [this] {
-        bool ok = false;
-        auto name = QInputDialog::getText(this, L("重命名主题", "Rename theme"), L("名称", "Name"),
-                                          QLineEdit::Normal, theme.name(), &ok)
-                        .trimmed();
-        if (ok && !name.isEmpty())
-            mutate([&](Theme &t) { t.data["name"] = name; });
+        renameLibraryItem(path);
     });
-    themeMenu->addAction(L("横屏主题", "Landscape theme"), this,
-                         [this] { mutate([](Theme &t) { t.data["landscape"] = true; }); });
-    themeMenu->addAction(L("竖屏主题", "Portrait theme"), this,
-                         [this] { mutate([](Theme &t) { t.data["landscape"] = false; }); });
-    themeMenu->addAction(L("切换文字背景", "Toggle text background"), this, [this] {
-        mutate([](Theme &t) { t.data["use_text_background"] = !t.data["use_text_background"].toBool(); });
-    });
+    auto themeType = themeMenu->addMenu(L("主题类型", "Theme type"));
+    themeType->setObjectName("themeTypeMenu");
+    auto typeGroup = new QActionGroup(themeType);
+    for (bool landscape : {true, false}) {
+        auto action = themeType->addAction(landscape ? L("横屏主题", "Landscape theme") : L("竖屏主题", "Portrait theme"));
+        action->setObjectName(landscape ? "landscapeTheme" : "portraitTheme");
+        action->setCheckable(true);
+        action->setData(landscape);
+        typeGroup->addAction(action);
+        connect(action, &QAction::triggered, this, [this, landscape] {
+            if (theme.data["landscape"].toBool(true) != landscape)
+                mutate([landscape](Theme &t) { t.data["landscape"] = landscape; });
+        });
+    }
+    const auto updateType = [this, typeGroup] {
+        for (auto action : typeGroup->actions()) action->setChecked(action->data().toBool() == theme.data["landscape"].toBool(true));
+    };
+    connect(themeType, &QMenu::aboutToShow, this, updateType);
+    connect(themeMenu, &QMenu::aboutToShow, this, updateType);
+    updateType();
     themeMenu->addAction(L("另存为", "Save as"), this, [this] { saveTheme(true); });
     themeMenu->addSeparator();
     deleteThemeAction = themeMenu->addAction(L("删除主题", "Delete theme"), this, [this] { deleteTheme(path); });
-    themeMenu->addAction(L("恢复内置主题", "Restore built-in themes"), this, &MainWindow::restoreBuiltinThemes);
     layout->addWidget(tools);
     editorSplit = new PaneSplitter;
     editorSplit->setObjectName("editorSplit");
+    editorSplit->showPaneText = L("展开%1", "Show %1");
+    editorSplit->hidePaneText = L("收起%1", "Hide %1");
     editorSplit->setChildrenCollapsible(false);
     layout->addWidget(editorSplit, 1);
     auto center = new QWidget;
     auto cv = new QVBoxLayout(center);
     cv->setContentsMargins(0, 0, 0, 0);
+    auto themeHeader = new QHBoxLayout;
+    editorThemeTitle = heading({}, themeHeader);
+    editorThemeTitle->setObjectName("editorThemeTitle");
+    editorThemeTitle->setMinimumWidth(0);
+    editorThemeTitle->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred);
+    auto renameTheme = new QToolButton;
+    renameTheme->setObjectName("renameEditorTheme");
+    renameTheme->setIcon(uiIcon(UiIcon::Edit));
+    renameTheme->setToolTip(L("重命名主题", "Rename theme"));
+    renameTheme->setAccessibleName(renameTheme->toolTip());
+    themeHeader->addWidget(renameTheme);
+    themeHeader->addStretch();
+    connect(renameTheme, &QToolButton::clicked, this, [this] { renameLibraryItem(path); });
+    cv->addLayout(themeHeader);
     auto layers = new QWidget;
     auto llayers = new QVBoxLayout(layers);
     llayers->setContentsMargins(8, 8, 8, 8);
@@ -554,8 +802,9 @@ void MainWindow::buildEditorPage(QWidget *w) {
     llayers->addLayout(copyButtons);
     auto tr = new LayerTree;
     tree = tr;
+    tree->setObjectName("layerTree");
     tr->dropped = [this](QStringList ids, QString parent, int index) { reparent(ids, parent, index); };
-    tree->setHeaderLabels({L("图层 / 双击重命名", "Layers / double-click to rename"), L("锁定", "Lock")});
+    tree->setHeaderLabels({L("图层", "Layers"), L("锁定", "Lock")});
     tree->setColumnWidth(0, 190);
     tree->setColumnWidth(1, 44);
     tree->setSelectionMode(QAbstractItemView::ExtendedSelection);
@@ -587,7 +836,11 @@ void MainWindow::buildEditorPage(QWidget *w) {
                     l["locked"] = i->checkState(1) == Qt::Checked;
             });
             t.data["layers"] = a;
-        });
+        }, false); // The delegate is still using this item while it commits the check state or name.
+        QSignalBlocker blocker(tree);
+        i->setToolTip(0, original["kind"].toString() + "\n" + (i->checkState(0) == Qt::Checked
+            ? L("可见 · 点击眼睛隐藏", "Visible · Click the eye to hide")
+            : L("隐藏 · 点击眼睛显示", "Hidden · Click the eye to show")));
     });
     left = layers;
     auto scroll = new QScrollArea;
@@ -618,6 +871,7 @@ void MainWindow::buildEditorPage(QWidget *w) {
     options->addWidget(snap);
     connect(snap, &QCheckBox::toggled, this, [this](bool v) { canvas->snap = v; });
     options->addStretch();
+    options->addWidget(zoomControls(canvas, "editor"));
     cv->addLayout(options);
     editorSplit->addWidget(center);
     connect(canvas, &Canvas::selectionChanged, this, [this] {
@@ -636,7 +890,7 @@ void MainWindow::buildEditorPage(QWidget *w) {
         if (!renderTimer.isActive())
             renderTimer.start(33);
     });
-    connect(canvas, &Canvas::committed, this, &MainWindow::remember);
+    connect(canvas, &Canvas::committed, this, [this](QJsonObject before) { remember(std::move(before)); });
     connect(canvas, &Canvas::createRequested, this, &MainWindow::createLayer);
     connect(canvas, &Canvas::contextRequested, this, &MainWindow::contextMenu);
     inspectorTabs = new QTabWidget;
@@ -649,7 +903,7 @@ void MainWindow::buildEditorPage(QWidget *w) {
     right = new QWidget;
     auto rv = new QVBoxLayout(right);
     rv->setContentsMargins(12, 12, 12, 12);
-    label(L("图层属性", "Layer properties"), rv);
+    heading(L("图层属性", "Layer properties"), rv);
     auto props = new QFormLayout;
     layerName = new QLineEdit;
     layerText = new QLineEdit;
@@ -746,31 +1000,54 @@ void MainWindow::buildEditorPage(QWidget *w) {
     editorSplit->setStretchFactor(0, 1);
     editorSplit->setStretchFactor(1, 0);
     editorSplit->setSizes({720, 280});
+    editorSplit->addCollapsiblePane(1, L("图层和属性", "layers and properties"), config["editor_pane_hidden"].toBool());
+    editorSplit->collapsedChanged = [this](int, bool collapsed) { config["editor_pane_hidden"] = collapsed; persist(); };
 }
 void MainWindow::buildDevicePanel(QWidget *w) {
     auto layout = new QVBoxLayout(w);
     layout->setContentsMargins(0, 0, 0, 0);
     auto scroll = new QScrollArea;
-    scroll->setMinimumSize(220, 70);
+    scroll->setObjectName("deviceScroll");
+    scroll->setMinimumSize(0, 70);
     scroll->setWidgetResizable(true);
+    scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     scroll->setFrameShape(QFrame::NoFrame);
-    scroll->setAlignment(Qt::AlignHCenter | Qt::AlignTop);
+    scroll->setAlignment(Qt::AlignLeft | Qt::AlignTop);
     auto content = new QWidget;
+    content->setObjectName("deviceContent");
+    content->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
     auto rv = new QVBoxLayout(content);
     rv->setContentsMargins(12, 0, 12, 12);
-    label(L("设备", "Device"), rv);
+    heading(L("设备", "Device"), rv);
     auto hint = new QLabel(L("连接 USB 副屏后，可应用当前主题并调整显示参数。", "Connect a USB display to send the current theme and adjust display settings."));
     hint->setWordWrap(true);
+    hint->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
     rv->addWidget(hint);
+    rv->addWidget(collectionToggle("deviceCollectData"));
     portBox = new QComboBox;
-    rv->addWidget(portBox);
-    auto connectionButtons = new QHBoxLayout;
-    connectButton = button({}, connectionButtons, [this] { connectDevice(); });
-    button(L("刷新", "Refresh"), connectionButtons, [this] { refreshPorts(); });
-    rv->addLayout(connectionButtons);
+    portBox->setObjectName("devicePort");
+    portBox->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    portBox->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+    portBox->setMinimumContentsLength(3);
+    auto portRow = new QHBoxLayout;
+    portRow->setSpacing(6);
+    portRow->addWidget(portBox, 1);
+    auto refresh = new QToolButton;
+    refresh->setObjectName("refreshDevicePorts");
+    refresh->setIcon(uiIcon(UiIcon::Refresh));
+    refresh->setToolTip(L("刷新串口", "Refresh ports"));
+    refresh->setAccessibleName(refresh->toolTip());
+    connect(refresh, &QToolButton::clicked, this, &MainWindow::refreshPorts);
+    portRow->addWidget(refresh);
+    rv->addLayout(portRow);
     auto form = new QFormLayout;
     form->setRowWrapPolicy(QFormLayout::WrapLongRows);
+    form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
     directionBox = new QComboBox;
+    directionBox->setObjectName("themeDirection");
+    directionBox->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+    directionBox->setMinimumContentsLength(1);
+    directionBox->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
     for (auto directionText : {L("竖屏", "Portrait"), L("反向竖屏", "Reverse portrait"),
                                L("横屏", "Landscape"), L("反向横屏", "Reverse landscape")})
         directionBox->addItem(directionText);
@@ -807,7 +1084,8 @@ void MainWindow::buildDevicePanel(QWidget *w) {
         persist();
     });
     auto advanced = new QToolButton;
-    advanced->setText(L("高级设备操作", "Advanced device operations"));
+    advanced->setText(L("高级设备操作", "Advanced operations"));
+    advanced->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
     auto advancedMenu = new QMenu(advanced);
     advancedMenu->addAction(L("清屏", "Clear"), this, [this] { device.command(6); });
     advancedMenu->addAction(L("休眠", "Sleep"), this, [this] {
@@ -825,8 +1103,11 @@ void MainWindow::buildDevicePanel(QWidget *w) {
     advanced->setPopupMode(QToolButton::InstantPopup);
     rv->addWidget(advanced);
     advanced->setProperty("deviceOperation", true);
+    connectButton = button({}, rv, [this] { connectDevice(); });
+    connectButton->setObjectName("connectDevice");
     sendButton = button({}, rv, [this] { toggleSend(); });
     sendButton->setObjectName("sendButton");
+    sendButton->setProperty("uiRole", "primary");
     rv->addStretch();
     scroll->setWidget(content);
     layout->addWidget(scroll);
@@ -834,16 +1115,113 @@ void MainWindow::buildDevicePanel(QWidget *w) {
 }
 void MainWindow::buildSensors(QWidget *w) {
     auto l = new QVBoxLayout(w);
-    label(L("本机传感器", "Local sensors"), l);
+    heading(L("本机传感器", "Local sensors"), l);
     label(L("默认每秒采集并更新副屏。内存已用、可用、总量以 GB 显示；无法读取的项目会在来源栏说明原因。",
             "Samples and updates the display every second by default. Used, available and total RAM are shown in GB. "
             "Unavailable sensors show a reason in the source column."),
           l)->setWordWrap(true);
     sensorTable = new QTableWidget(0, 3);
+    sensorTable->setObjectName("sensorTable");
     sensorTable->setHorizontalHeaderLabels({L("项目", "Metric"), L("数值", "Value"), L("来源 / 状态", "Source / status")});
-    sensorTable->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+    auto header = sensorTable->horizontalHeader();
+    header->setSectionResizeMode(QHeaderView::Interactive);
+    header->setMinimumSectionSize(80);
+    header->setStretchLastSection(false);
     sensorTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    sensorTable->setShowGrid(true);
+    sensorTable->setAlternatingRowColors(true);
+    sensorTable->verticalHeader()->hide();
+    sensorTable->verticalHeader()->setDefaultSectionSize(36);
+    sensorTable->setSelectionBehavior(QAbstractItemView::SelectRows);
+    sensorTable->viewport()->installEventFilter(this);
+    sensorTable->installEventFilter(this);
+    auto table = sensorTable;
+    connect(header, &QHeaderView::sectionResized, this, [this, table] {
+        if (building || table != sensorTable || !table->property("columnsInitialized").toBool()) return;
+        QJsonArray widths;
+        for (int column = 0; column < table->columnCount(); ++column) widths.append(table->columnWidth(column));
+        config["sensor_column_widths"] = widths;
+        persist();
+    });
     l->addWidget(sensorTable, 1);
+    updateSensorColumns();
+}
+void MainWindow::updateSensorColumns() {
+    if (!sensorTable) return;
+    const auto savedWidths = config["sensor_column_widths"].toArray();
+    const bool hasSavedWidths = savedWidths.size() == 3 && std::all_of(savedWidths.begin(), savedWidths.end(),
+        [](const QJsonValue &value) { return value.isDouble() && value.toInt() >= 80 && value.toInt() <= 4096; });
+    if (!hasSavedWidths && !sensorTable->isVisible()) return;
+    if (hasSavedWidths && sensorTable->property("columnsInitialized").toBool()) return;
+    const int available = sensorTable->viewport()->width();
+    const int widths[]{qMax(80, available * 24 / 100), qMax(80, available * 28 / 100),
+                       qMax(80, available - available * 24 / 100 - available * 28 / 100)};
+    const QSignalBlocker blocker(sensorTable->horizontalHeader());
+    for (int column = 0; column < 3; ++column)
+        sensorTable->setColumnWidth(column, hasSavedWidths ? savedWidths[column].toInt() : widths[column]);
+    sensorTable->setProperty("columnsInitialized", true);
+}
+QWidget *MainWindow::zoomControls(Canvas *target, const QString &prefix) {
+    auto controls = new QWidget;
+    controls->setObjectName(prefix + "ZoomControls");
+    auto row = new QHBoxLayout(controls);
+    row->setContentsMargins(0, 0, 0, 0);
+    row->setSpacing(4);
+    const auto action = [&](const QString &name, const QString &caption, const QString &tooltip, auto callback) {
+        auto button = new QToolButton;
+        button->setObjectName(prefix + name);
+        button->setText(caption);
+        button->setToolTip(tooltip);
+        button->setAccessibleName(tooltip);
+        connect(button, &QToolButton::clicked, controls, callback);
+        row->addWidget(button);
+        return button;
+    };
+    action("Fit", L("适应窗口", "Fit"), L("适应窗口", "Fit to window"), [target] { target->setFit(true); });
+    action("ActualSize", "1:1", L("实际大小", "Actual size"), [target] { target->setZoom(1); });
+    auto slider = new QSlider(Qt::Horizontal);
+    slider->setObjectName(prefix + "ZoomSlider");
+    slider->setRange(25, 400);
+    slider->setMinimumWidth(40);
+    slider->setMaximumWidth(96);
+    slider->setToolTip(L("缩放", "Zoom"));
+    slider->setAccessibleName(slider->toolTip());
+    row->addWidget(slider);
+    auto input = new QDoubleSpinBox;
+    input->setObjectName(prefix + "ZoomValue");
+    input->setProperty("zoomInput", true);
+    input->setRange(10, 10000);
+    input->setDecimals(2);
+    input->setSingleStep(5);
+    input->setSuffix(QStringLiteral("%"));
+    input->setButtonSymbols(QAbstractSpinBox::NoButtons);
+    input->setKeyboardTracking(false);
+    input->setFixedWidth(92);
+    input->setToolTip(L("缩放百分比（手动范围 25%–400%）", "Zoom percentage (manual range 25%–400%)"));
+    input->setAccessibleName(input->toolTip());
+    row->addWidget(input);
+    action("ZoomOut", "−", L("缩小", "Zoom out"), [target] { target->setZoom(target->zoom() / 1.2); });
+    action("ZoomIn", "+", L("放大", "Zoom in"), [target] { target->setZoom(target->zoom() * 1.2); });
+    const auto sync = [target, slider, input] {
+        const QSignalBlocker blockSlider(slider), blockInput(input);
+        slider->setValue(qRound(target->zoom() * 100));
+        input->setValue(target->zoom() * 100.);
+    };
+    connect(target, &Canvas::zoomChanged, controls, sync);
+    connect(slider, &QSlider::valueChanged, controls, [target](int value) { target->setZoom(value / 100.); });
+    connect(input, &QDoubleSpinBox::valueChanged, controls, [target](double value) { target->setZoom(value / 100.); });
+    sync();
+    return controls;
+}
+QCheckBox *MainWindow::collectionToggle(const QString &name) {
+    auto toggle = new QCheckBox(L("采集数据", "Collect data"));
+    toggle->setObjectName(name);
+    toggle->setProperty("collectionToggle", true);
+    toggle->setChecked(runtime->collectionEnabled());
+    toggle->setToolTip(L("关闭后停止采集，保留最后一帧；重新开启时立即刷新。",
+                        "Pause collection and keep the last frame. Resume to refresh immediately."));
+    connect(toggle, &QCheckBox::toggled, this, [this](bool enabled) { runtime->setCollectionEnabled(enabled); });
+    return toggle;
 }
 void MainWindow::buildSettings(QWidget *w) {
     auto pageLayout = new QVBoxLayout(w);
@@ -858,10 +1236,51 @@ void MainWindow::buildSettings(QWidget *w) {
     auto outer = new QVBoxLayout(content);
     scroll->setWidget(content);
     pageLayout->addWidget(scroll);
-    label(L("设置", "Settings"), outer);
+    outer->setSpacing(16);
+    auto appearanceGroup = new QGroupBox(L("界面配色", "Interface colors"));
+    auto appearanceForm = new QFormLayout(appearanceGroup);
+    appearanceForm->setRowWrapPolicy(QFormLayout::WrapLongRows);
+    appearanceForm->setVerticalSpacing(10);
+    appearanceForm->setHorizontalSpacing(16);
+    uiThemeBox = new QComboBox;
+    uiThemeBox->setObjectName("uiTheme");
+    appearanceForm->addRow(L("配色主题", "Color theme"), uiThemeBox);
+    uiThemeStatus = new QLabel;
+    uiThemeStatus->setObjectName("uiThemeStatus");
+    uiThemeStatus->setProperty("uiRole", "caption");
+    uiThemeStatus->setWordWrap(true);
+    uiThemeStatus->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    appearanceForm->addRow(uiThemeStatus);
+    auto appearanceButtons = new QHBoxLayout;
+    appearanceButtons->setSpacing(8);
+    auto reloadColors = button(L("重载配色", "Reload palettes"), appearanceButtons, [this] {
+        selectUiTheme(config["ui_theme"].toString("system"));
+        reloadUiThemes();
+    });
+    reloadColors->setObjectName("reloadUiThemes");
+    auto copyColors = button(L("复制为自定义", "Copy to custom"), appearanceButtons, [this] { createUiTheme(); });
+    copyColors->setObjectName("copyUiTheme");
+    button(L("打开配色目录", "Open palette folder"), appearanceButtons, [this] {
+        QDir().mkpath(dataDir + "/ui-themes");
+        QDesktopServices::openUrl(QUrl::fromLocalFile(dataDir + "/ui-themes"));
+    });
+    appearanceForm->addRow(appearanceButtons);
+    auto appearanceHint = new QLabel(L("配色由 JSON 文件定义；编辑后点击“重载配色”即可应用。",
+        "Palettes are JSON files. After editing a file, click Reload palettes to apply it."));
+    appearanceHint->setWordWrap(true);
+    appearanceForm->addRow(appearanceHint);
+    outer->addWidget(appearanceGroup);
+    reloadUiThemes();
+    connect(uiThemeBox, &QComboBox::currentIndexChanged, this, [this] {
+        selectUiTheme(uiThemeBox->currentData().toString());
+        reloadUiThemes();
+    });
     auto group = new QGroupBox(L("运行设置", "Behavior"));
     auto form = new QFormLayout(group);
     form->setRowWrapPolicy(QFormLayout::WrapLongRows);
+    form->setVerticalSpacing(10);
+    form->setHorizontalSpacing(16);
+    form->addRow(collectionToggle("collectData"));
     auto language = new QComboBox;
     language->addItem("自动 / System", "auto");
     language->addItem("简体中文", "chinese");
@@ -941,12 +1360,14 @@ void MainWindow::buildSettings(QWidget *w) {
     connect(autoLightweight, &QCheckBox::toggled, this, updateLightweight);
     connect(delay, &QSpinBox::valueChanged, this, updateLightweight);
     auto disk = new QComboBox;
-    disk->addItem(L("系统分区", "System drive"), QString());
+    disk->setObjectName("diskPartition");
+    disk->addItem(L("系统分区（%1，默认）", "System drive (%1, default)")
+                      .arg(QDir::toNativeSeparators(QDir::rootPath())), QString());
     for (auto d : QStorageInfo::mountedVolumes())
         if (d.isReady() && !d.isReadOnly())
             disk->addItem(d.rootPath(), d.rootPath());
     disk->setCurrentIndex(qMax(0, disk->findData(config["disk"].toString())));
-    form->addRow(L("硬盘分区", "Disk partition"), disk);
+    form->addRow(L("磁盘空间监控", "Disk space monitoring"), disk);
     connect(disk, &QComboBox::currentIndexChanged, this, [this, disk] {
         config["disk"] = disk->currentData().toString();
         persist();
@@ -968,9 +1389,30 @@ void MainWindow::buildSettings(QWidget *w) {
     };
     connect(weatherEnabled, &QCheckBox::toggled, this, applyWeather);
     connect(weatherCity, &QLineEdit::editingFinished, this, applyWeather);
-    auto weatherCredit = new QLabel(L("天气：<a href=\"https://open-meteo.com/\">Open-Meteo</a>（CC BY 4.0）。留空城市时使用 ipwho.is。",
+    auto weatherActions = new QWidget;
+    auto weatherRow = new QHBoxLayout(weatherActions);
+    weatherRow->setContentsMargins(0, 0, 0, 0);
+    weatherRow->setSpacing(12);
+    auto fetchWeather = new QPushButton(L("立即获取天气信息", "Fetch weather now"));
+    fetchWeather->setObjectName("fetchWeatherNow");
+    weatherRow->addWidget(fetchWeather);
+    auto weatherStatus = new StatusLabel;
+    weatherStatus->setObjectName("weatherStatus");
+    weatherStatus->setWordWrap(true);
+    weatherStatus->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+    weatherStatus->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    weatherRow->addWidget(weatherStatus, 1);
+    form->addRow(weatherActions);
+    connect(fetchWeather, &QPushButton::clicked, this, [this, applyWeather] {
+        applyWeather();
+        runtime->requestWeather();
+        updateWeatherStatus();
+    });
+    updateWeatherStatus();
+    auto weatherCredit = new PaletteLinkLabel(L("天气：<a href=\"https://open-meteo.com/\">Open-Meteo</a>（CC BY 4.0）。留空城市时使用 ipwho.is。",
                                      "Weather: <a href=\"https://open-meteo.com/\">Open-Meteo</a> (CC BY 4.0). Empty city uses ipwho.is."));
     weatherCredit->setOpenExternalLinks(true);
+    weatherCredit->setObjectName("weatherCredit");
     weatherCredit->setWordWrap(true);
     form->addRow(weatherCredit);
     outer->addWidget(group);
@@ -978,6 +1420,8 @@ void MainWindow::buildSettings(QWidget *w) {
     auto sensorsGroup = new QGroupBox(L("Windows 传感器", "Windows sensors"));
     auto sensorsForm = new QFormLayout(sensorsGroup);
     sensorsForm->setRowWrapPolicy(QFormLayout::WrapLongRows);
+    sensorsForm->setVerticalSpacing(10);
+    sensorsForm->setHorizontalSpacing(16);
     auto source = new QComboBox;
     source->setObjectName("windowsSensorSource");
     source->addItem(L("仅系统数据", "System data only"), "system");
@@ -996,7 +1440,7 @@ void MainWindow::buildSettings(QWidget *w) {
     lhmPort->setRange(1, 65535);
     lhmPort->setValue(qBound(1, config["lhm_port"].toInt(8085), 65535));
     sensorsForm->addRow(L("LHM 本机端口", "LHM local port"), lhmPort);
-    auto sourceHint = new QLabel;
+    auto sourceHint = new PaletteLinkLabel;
     sourceHint->setObjectName("windowsSensorHint");
     sourceHint->setWordWrap(true);
     sourceHint->setOpenExternalLinks(true);
@@ -1036,18 +1480,65 @@ void MainWindow::buildSettings(QWidget *w) {
     auto buttons = new QHBoxLayout;
     button(L("打开数据目录", "Open data folder"), buttons,
            [this] { QDesktopServices::openUrl(QUrl::fromLocalFile(dataDir)); });
-    button(L("导出诊断", "Export diagnostics"), buttons, [this] {
-        auto file = QFileDialog::getSaveFileName(this, L("导出诊断", "Export diagnostics"),
-                                                 dataDir + "/diagnostics.json", "JSON (*.json)");
-        if (!file.isEmpty()) {
-            QSaveFile f(file);
-            if (f.open(QIODevice::WriteOnly)) {
-                f.write(QJsonDocument(diagnostics()).toJson());
-                f.commit();
-            }
-        }
-    });
+    buttons->addStretch();
     outer->addLayout(buttons);
+}
+void MainWindow::reloadUiThemes() {
+    const QSignalBlocker blocker(uiThemeBox);
+    const auto selected = config["ui_theme"].toString("system");
+    uiThemeBox->clear();
+    uiThemeBox->addItem(L("跟随系统", "Follow system"), "system");
+    const auto themes = uiThemes(dataDir);
+    for (const auto &palette : themes) {
+        auto name = palette.name.isEmpty() ? palette.id : palette.name;
+        if (palette.id.startsWith("custom:")) name = L("自定义 · ", "Custom · ") + name;
+        name += !palette.error.isEmpty() ? L("（无效）", " (Invalid)") : palette.mode == "light" ? L("（浅色）", " (Light)") : L("（深色）", " (Dark)");
+        uiThemeBox->addItem(name, palette.id);
+        const int row = uiThemeBox->count() - 1;
+        uiThemeBox->setItemData(row, palette.error.isEmpty() ? palette.file : palette.error, Qt::ToolTipRole);
+        if (!palette.error.isEmpty()) {
+            auto model = qobject_cast<QStandardItemModel *>(uiThemeBox->model());
+            if (model) model->item(row)->setEnabled(false);
+        }
+    }
+    int index = uiThemeBox->findData(selected);
+    if (index < 0) {
+        uiThemeBox->addItem(L("找不到配色：", "Palette not found: ") + selected, selected);
+        index = uiThemeBox->count() - 1;
+    }
+    uiThemeBox->setCurrentIndex(index);
+    uiThemeStatus->setTextFormat(Qt::PlainText);
+    if (!uiThemeError.isEmpty()) uiThemeStatus->setText(L("配色加载失败：", "Could not load palette: ") + uiThemeError);
+    else if (selected == "system") uiThemeStatus->setText(L("跟随系统的 Qt 外观和配色。", "Use the system's Qt style and colors."));
+    else uiThemeStatus->setText(uiThemeBox->itemData(index, Qt::ToolTipRole).toString());
+}
+void MainWindow::selectUiTheme(const QString &id) {
+    uiThemeError = UiAppearance::instance().apply(id, dataDir);
+    if (uiThemeError.isEmpty()) {
+        config["ui_theme"] = id;
+        persist();
+        updateStatus();
+        emit preferencesChanged();
+    }
+}
+void MainWindow::createUiTheme() {
+    const auto folder = dataDir + "/ui-themes";
+    if (!QDir().mkpath(folder)) {
+        uiThemeError = L("无法创建配色目录", "Cannot create palette folder");
+        reloadUiThemes();
+        return;
+    }
+    QString token = "my-palette";
+    int count = 1;
+    while (QFileInfo::exists(folder + '/' + token + ".json")) token = "my-palette-" + QString::number(++count);
+    auto json = UiAppearance::instance().exportCurrent();
+    json["name"] = L("自定义配色", "My palette") + (count > 1 ? ' ' + QString::number(count) : QString());
+    QSaveFile file(folder + '/' + token + ".json");
+    const auto bytes = QJsonDocument(json).toJson();
+    if (!file.open(QIODevice::WriteOnly) || file.write(bytes) != bytes.size() || !file.commit())
+        uiThemeError = file.errorString();
+    else selectUiTheme("custom:" + token);
+    reloadUiThemes();
 }
 void MainWindow::updateStartupUi() {
     if (!startupToggle || !startupStatus) return;
@@ -1069,7 +1560,7 @@ void MainWindow::configureWeather() {
     const auto options = theme.data.value("weather").toObject();
     const bool enabled = config["weather_enabled"].toBool(options["enabled"].toBool());
     const auto city = config["weather_city"].toString(options["city"].toString());
-    collector.setWeather(enabled, city);
+    runtime->configureWeather();
     if (root) {
         if (const auto checkbox = root->findChild<QCheckBox *>("weatherEnabled")) {
             QSignalBlocker blocker(checkbox);
@@ -1080,20 +1571,31 @@ void MainWindow::configureWeather() {
             field->setText(city);
         }
     }
+    updateWeatherStatus();
 }
-void MainWindow::buildDiagnostics(QWidget *w) {
-    auto l = new QVBoxLayout(w);
-    label(L("诊断", "Diagnostics"), l);
-    diagnosticText = new QPlainTextEdit;
-    diagnosticText->setReadOnly(true);
-    l->addWidget(diagnosticText, 1);
-    auto row = new QHBoxLayout;
-    button(L("刷新诊断", "Refresh"), row, [this] {
-        diagnosticText->setPlainText(QString::fromUtf8(QJsonDocument(diagnostics()).toJson()));
-    });
-    button(L("复制诊断", "Copy"), row,
-           [this] { qApp->clipboard()->setText(QString::fromUtf8(QJsonDocument(diagnostics()).toJson())); });
-    l->addLayout(row);
+void MainWindow::updateWeatherStatus() {
+    if (!root) return;
+    auto button = root->findChild<QPushButton *>("fetchWeatherNow");
+    auto label = root->findChild<QLabel *>("weatherStatus");
+    if (!button || !label) return;
+    const auto options = theme.data.value("weather").toObject();
+    const bool enabled = config.value("weather_enabled").toBool(options["enabled"].toBool());
+    const auto state = collector.weatherStatus();
+    button->setEnabled(enabled && runtime->collectionEnabled() && !state.busy);
+    QString text, tone = "muted";
+    if (!runtime->collectionEnabled()) text = L("采集已暂停，请先开启“采集数据”。", "Collection is paused. Enable Collect data first.");
+    else if (!enabled) text = L("请先启用天气。", "Enable weather first.");
+    else if (state.busy) text = L("正在获取天气信息…", "Fetching weather…");
+    else if (!state.error.isEmpty()) {
+        text = L("获取失败：", "Failed: ") + state.error;
+        tone = "error";
+    } else if (state.updated > 0) {
+        text = L("已获取：%1（%2）", "Updated: %1 (%2)")
+            .arg(state.summary, QDateTime::fromMSecsSinceEpoch(state.updated).toString("HH:mm:ss"));
+        tone = "success";
+    } else text = L("点击按钮获取最新天气信息。", "Click to fetch the latest weather.");
+    static_cast<StatusLabel *>(label)->setState(text, tone);
+    label->setToolTip(text);
 }
 void MainWindow::setPage(int n) {
     if (n < 0 || n >= PageCount)
@@ -1107,20 +1609,25 @@ void MainWindow::setPage(int n) {
     canvas->update();
     const bool themePage = n == LibraryPage || n == EditorPage;
     runtime->preview = isVisible() && themePage;
+    runtime->allMetrics = isVisible() && n == SensorsPage;
+    runtime->weatherSettingsVisible = isVisible() && n == SettingsPage;
+    runtime->configureWeather();
+    if (runtime->allMetrics) runtime->tick();
     pageTitle->setText(navigation->item(n)->data(Qt::UserRole).toString());
     setWindowTitle(pageTitle->text() + L(" · 图灵智显", " · Turing Screen"));
-    title->setVisible(themePage);
+
     resolution->setVisible(themePage && pages->width() >= 850);
     modeButton->setVisible(themePage);
+    uiRole(modeButton, n == LibraryPage ? "primary" : "");
     modeButton->setText(n == EditorPage ? L("返回预览", "Back to preview") : L("编辑主题", "Edit theme"));
     saveButton->setVisible(n == EditorPage);
     if (building)
         return;
     if (n == SettingsPage) startup->refresh();
-    if (n == SensorsPage)
+    if (n == SensorsPage) {
+        updateSensorColumns();
         tick();
-    if (n == DiagnosticsPage)
-        diagnosticText->setPlainText(QString::fromUtf8(QJsonDocument(diagnostics()).toJson()));
+    }
     if (themePage) {
         render();
         QTimer::singleShot(0, this, [this] {
@@ -1140,10 +1647,14 @@ void MainWindow::setSidebarExpanded(bool expanded) {
         return;
     sidebarExpanded = expanded;
     sidebar->setFixedWidth(expanded ? 208 : 60);
-    sidebarToggle->setArrowType(expanded ? Qt::LeftArrow : Qt::RightArrow);
+    sidebarBrand->setToolButtonStyle(expanded ? Qt::ToolButtonTextBesideIcon : Qt::ToolButtonIconOnly);
+    sidebarToggle->setToolButtonStyle(Qt::ToolButtonIconOnly);
+    sidebarToggle->setIcon(uiIcon(expanded ? UiIcon::SidebarCollapse : UiIcon::SidebarExpand));
     const auto description = expanded ? L("收起功能栏", "Collapse sidebar") : L("展开功能栏", "Expand sidebar");
+    sidebarToggle->setText({});
     sidebarToggle->setToolTip(description);
     sidebarToggle->setAccessibleName(description);
+    sidebarBrand->setToolTip(sidebarBrand->text() + " · " + description);
     for (int n = 0; n < navigation->count(); ++n) {
         auto item = navigation->item(n);
         item->setText(expanded ? item->data(Qt::UserRole).toString() : QString());
@@ -1154,81 +1665,40 @@ void MainWindow::setSidebarExpanded(bool expanded) {
 void MainWindow::updateResponsiveLayout() {
     if (!pages || !librarySplit || !editorSplit)
         return;
-    const auto reflow = [](QSplitter *splitter, bool vertical, const QList<int> &wideSizes,
+    const auto reflow = [](PaneSplitter *splitter, bool vertical, const QList<int> &wideSizes,
                            const QList<int> &narrowSizes) {
         const auto orientation = vertical ? Qt::Vertical : Qt::Horizontal;
         if (splitter->orientation() != orientation) {
-            splitter->setOrientation(orientation);
-            splitter->setSizes(vertical ? narrowSizes : wideSizes);
+            splitter->setPaneOrientation(orientation, vertical ? narrowSizes : wideSizes);
         }
     };
-    const bool compactPreview = pages->width() < 900;
-    library->setMaximumWidth(compactPreview ? QWIDGETSIZE_MAX : 320);
+    const bool compactPreview = pages->width() < 760;
+    libraryBrowser->setMaximumWidth(compactPreview ? QWIDGETSIZE_MAX : 380);
     devicePanel->setMaximumWidth(compactPreview ? QWIDGETSIZE_MAX : 340);
-    const auto mode = compactPreview ? QListView::IconMode : QListView::ListMode;
-    const auto flow = compactPreview ? QListView::LeftToRight : QListView::TopToBottom;
-    const auto grid = compactPreview
-        ? QSize(qMax(1, (library->viewport()->width() - 4 * library->spacing()) / 2),
-                qMax(104, library->iconSize().height() + 2 * library->fontMetrics().height() + 12))
-        : QSize();
-    const bool relayout = library->viewMode() != mode || library->flow() != flow || library->isWrapping() != compactPreview ||
-                          library->gridSize() != grid;
-    if (library->viewMode() != mode) library->setViewMode(mode);
-    library->setMovement(QListView::Static);
-    if (library->flow() != flow) library->setFlow(flow);
-    if (library->isWrapping() != compactPreview) library->setWrapping(compactPreview);
-    if (library->gridSize() != grid) library->setGridSize(grid);
-    if (relayout)
-        for (int i = 0; i < library->count(); ++i)
-            library->item(i)->setSizeHint(compactPreview ? grid : QSize(220, 80));
-    reflow(librarySplit, compactPreview, {250, 650, 280}, {180, 260, 180});
-    reflow(editorSplit, pages->width() < 820, {720, 300}, {360, 260});
-    if (relayout && library->isVisible()) library->doItemsLayout();
+    reflow(librarySplit, compactPreview, {300, 540, 240}, {220, 260, 180});
+    reflow(editorSplit, pages->width() < 680, {720, 300}, {360, 260});
     resolution->setVisible((page == LibraryPage || page == EditorPage) && pages->width() >= 850);
     QTimer::singleShot(0, this, &MainWindow::thumbnails);
 }
 void MainWindow::buildLibrary() {
-    QSignalBlocker b(library);
-    library->clear();
-    auto add = [&](QString path, QString name, QSize size) {
-        auto i = new QListWidgetItem(
-            QString("%1\n%2 × %3 · %4")
-                .arg(name)
-                .arg(size.width())
-                .arg(size.height())
-                .arg(size.width() > size.height() ? L("横屏", "Landscape") : L("竖屏", "Portrait")),
-            library);
-        i->setData(Qt::UserRole, path);
-        i->setSizeHint(library->viewMode() == QListView::IconMode ? library->gridSize() : QSize(220, 80));
-        i->setToolTip(i->text());
-        i->setHidden(search && !i->text().contains(search->text(), Qt::CaseInsensitive));
-        if (path == this->path)
-            library->setCurrentItem(i);
-    };
-    add({}, L("系统概览", "System overview"), QSize(480, 320));
-    for (auto e : entries)
-        add(e.path, e.name, e.size);
-    bool matches = false;
-    for (int n = 0; n < library->count(); ++n)
-        matches |= !library->item(n)->isHidden();
-    libraryEmpty->setVisible(!matches);
+    buildFolderTree();
+    filterLibrary();
     updateThemeActions();
     QTimer::singleShot(0, this, &MainWindow::thumbnails);
 }
 QString MainWindow::libraryKey(const QString &file) const {
     if (file.isEmpty())
         return "__starter__";
-    if (builtinTheme(file))
-        return "builtin:" + QDir(fileIdentity(assets())).relativeFilePath(fileIdentity(file));
     return fileIdentity(file);
 }
 bool MainWindow::builtinTheme(const QString &file) const {
-    return withinDirectory(file, assets());
+    return withinDirectory(file, runtime->library.root + "/official");
 }
 bool MainWindow::managedTheme(const QString &file) const {
-    return !QFileInfo(file).isSymLink() && !builtinTheme(file) && withinDirectory(file, dataDir + "/themes");
+    return runtime->library.contains(file) && !runtime->library.protectedFolder(file);
 }
 bool MainWindow::hiddenTheme(const QString &file) const {
+    if (runtime->library.contains(file)) return false;
     const auto key = libraryKey(file);
     for (const auto &value : config["hidden_themes"].toArray())
         if (value.toString() == key)
@@ -1246,6 +1716,7 @@ void MainWindow::reloadLibrary() {
     QJsonObject index;
     QSet<QString> seen;
     const auto add = [&](const QString &file) {
+        if (QFileInfo(file).fileName().startsWith('.')) return;
         const auto key = libraryKey(file);
         if (seen.contains(key) || hiddenTheme(file) || file.endsWith("AppConfig.data"))
             return;
@@ -1260,12 +1731,13 @@ void MainWindow::reloadLibrary() {
                           {"name", item.name()}, {"width", item.size().width()}, {"height", item.size().height()}};
             }
             index.insert(file, cached);
+            if (file.endsWith(".data", Qt::CaseInsensitive)) cached["name"] = info.completeBaseName();
             entries.append({file, cached["name"].toString(), QSize(cached["width"].toInt(), cached["height"].toInt())});
             seen.insert(key);
         } catch (const std::exception &) {
         }
     };
-    for (const auto &directory : {assets() + "/themes", assets() + "/official/config", dataDir + "/themes"}) {
+    for (const auto &directory : {runtime->library.root}) {
         QDirIterator files(directory, {"*.data", "*.json"}, QDir::Files, QDirIterator::Subdirectories);
         while (files.hasNext())
             add(files.next());
@@ -1289,7 +1761,7 @@ void MainWindow::includeTheme(const QString &file) {
         if (value.toString() != key)
             hidden.append(value);
     config["hidden_themes"] = hidden;
-    if (!builtinTheme(file) && !managedTheme(file)) {
+    if (!runtime->library.contains(file)) {
         auto external = config["external_themes"].toArray();
         bool found = false;
         for (const auto &value : external)
@@ -1307,172 +1779,104 @@ void MainWindow::includeTheme(const QString &file) {
     }
 }
 void MainWindow::updateThemeActions() {
-    const bool available = !path.isEmpty();
-    if (deleteThemeButton) {
-        deleteThemeButton->setEnabled(available);
-        deleteThemeButton->setToolTip(available ? L("删除当前主题", "Delete current theme")
-                                                : L("系统概览保留为默认主题", "System overview is the default theme"));
-    }
+    const bool available = !path.isEmpty() && !runtime->library.recycled(path);
     if (deleteThemeAction)
         deleteThemeAction->setEnabled(available);
+    for (const auto name : {"renamePreviewTheme", "renameEditorTheme"})
+        if (auto button = findChild<QToolButton *>(name)) button->setEnabled(path.isEmpty() || (managedTheme(path) && available));
+    if (modeButton) modeButton->setEnabled(!runtime->library.recycled(path));
+    if (saveButton) saveButton->setEnabled(!runtime->library.recycled(path));
 }
-void MainWindow::deleteTheme(const QString &file) {
-    if (file.isEmpty())
-        return;
-    const auto key = libraryKey(file);
-    QString name = QFileInfo(file).completeBaseName();
-    bool unsaved = libraryKey(path) == key && dirty;
-    for (const auto &entry : entries)
-        if (libraryKey(entry.path) == key)
-            name = entry.name;
-    for (auto i = drafts.cbegin(); i != drafts.cend(); ++i)
-        if (libraryKey(i->path) == key)
-            unsaved |= i->theme.data != i->saved;
-    auto effect = builtinTheme(file)
-        ? L("此内置主题将从主题库隐藏，可使用“恢复内置主题”重新显示。",
-            "This built-in theme will be hidden. Use Restore built-in themes to show it again.")
-        : managedTheme(file)
-        ? L("主题文件将移至数据目录的 deleted-themes 文件夹，可从该目录找回。",
-            "The theme file will be moved to deleted-themes in the data folder for recovery.")
-        : L("此主题将从主题库移除，原始文件保留在原位置。",
-            "This theme will be removed from the library; the original file is kept in its location.");
-    if (unsaved)
-        effect += L("\n此主题还有未保存的修改，删除将一并丢弃。",
-                    "\nThis theme has unsaved changes, which will also be discarded.");
-    QMessageBox confirmation(QMessageBox::Warning, L("删除主题", "Delete theme"),
-                             L("删除主题“%1”？\n\n", "Delete theme “%1”?\n\n").arg(name) + effect,
-                             QMessageBox::NoButton, this);
+void MainWindow::deleteTheme(const QString &file, bool permanent) {
+    if (file.isEmpty() || runtime->library.protectedFolder(file)) return;
+    QString name = QFileInfo(file).fileName();
+    for (const auto &entry : entries) if (entry.path == file) name = entry.name;
+    const auto affected = [selected = file](const QString &value) { return value == selected || withinDirectory(value, selected); };
+    bool unsaved = affected(path) && dirty;
+    for (const auto &draft : drafts) if (affected(draft.path)) unsaved |= draft.theme.data != draft.saved;
+    auto effect = permanent ? L("文件将被永久移除，无法从回收站还原。", "Files will be permanently removed and cannot be restored from the recycle bin.")
+        : managedTheme(file) ? L("文件将移入 themes/deleted 回收站，可以还原。", "Files will be moved to themes/deleted and can be restored.")
+        : L("仅移除主题库中的引用，保留外部原始文件。", "Only the library reference will be removed; the external original is kept.");
+    if (unsaved) effect += L("\n此主题还有未保存的修改，删除将一并丢弃。", "\nThis theme has unsaved changes, which will also be discarded.");
+    QMessageBox confirmation(QMessageBox::Warning, permanent ? L("彻底删除", "Delete permanently") : L("删除", "Delete"),
+        L("删除“%1”？\n\n", "Delete “%1”?\n\n").arg(name) + effect, QMessageBox::NoButton, this);
     confirmation.setObjectName("deleteThemeConfirmation");
-    confirmation.addButton(L("删除", "Delete"), QMessageBox::DestructiveRole);
+    confirmation.addButton(permanent ? L("彻底删除", "Delete permanently") : L("删除", "Delete"), QMessageBox::DestructiveRole);
     const auto cancel = confirmation.addButton(L("取消", "Cancel"), QMessageBox::RejectRole);
-    confirmation.setDefaultButton(cancel);
-    confirmation.setEscapeButton(cancel);
-    confirmation.exec();
-    if (!confirmation.clickedButton() || confirmation.buttonRole(confirmation.clickedButton()) != QMessageBox::DestructiveRole)
-        return;
+    confirmation.setDefaultButton(cancel); confirmation.setEscapeButton(cancel); confirmation.exec();
+    if (!confirmation.clickedButton() || confirmation.buttonRole(confirmation.clickedButton()) != QMessageBox::DestructiveRole) return;
     QString error;
-    if (!removeTheme(file, error))
-        QMessageBox::warning(this, L("删除失败", "Delete failed"), error);
+    if (!removeTheme(file, error, permanent)) QMessageBox::warning(this, L("删除失败", "Delete failed"), error);
 }
-bool MainWindow::removeTheme(const QString &file, QString &error) {
+bool MainWindow::removeTheme(const QString &file, QString &error, bool permanent) {
     error.clear();
-    if (file.isEmpty()) {
-        error = L("系统概览保留为默认主题。", "System overview is the default theme.");
-        return false;
+    const bool owned = managedTheme(file);
+    if (file.isEmpty() || runtime->library.protectedFolder(file) || (permanent && !owned) || (!owned && !QFileInfo(file).isFile())) {
+        error = L("请选择主题库中的主题或子文件夹。", "Choose a theme or subfolder in the library."); return false;
     }
-    const auto key = libraryKey(file);
-    const bool active = libraryKey(path) == key;
-    QStringList files, draftKeys, directionKeys;
-    for (const auto &entry : entries)
-        if (libraryKey(entry.path) == key)
-            files.append(entry.path);
-    if (active)
-        files.append(path);
-    if (files.isEmpty()) {
-        error = L("主题不在主题库中。", "The theme is not in the library.");
-        return false;
-    }
-    for (const auto &related : files)
-        directionKeys.append(orientationKey(related));
-    for (auto i = drafts.cbegin(); i != drafts.cend(); ++i)
-        if (libraryKey(i->path) == key)
-            draftKeys.append(i.key());
-    const bool personal = managedTheme(file);
+    const auto affected = [selected = file](const QString &value) { return value == selected || withinDirectory(value, selected); };
+    const bool active = affected(path);
+    auto next = config;
     QJsonArray external;
-    for (const auto &value : config["external_themes"].toArray())
-        if (libraryKey(value.toString()) != key)
-            external.append(value);
+    for (const auto &value : config["external_themes"].toArray()) if (!affected(value.toString())) external.append(value);
+    next["external_themes"] = external;
+    if (!owned) { auto hidden = next["hidden_themes"].toArray(); hidden.append(libraryKey(file)); next["hidden_themes"] = hidden; }
+    auto directions = next["theme_orientations"].toObject();
+    for (const auto &entry : entries) if (affected(entry.path)) directions.remove(orientationKey(entry.path));
+    next["theme_orientations"] = directions;
+    if (active) { next["selected_theme"] = QString(); next["orientation"] = directions.value("__starter__").toInt(2); }
     QString backup;
-    if (personal && QFileInfo::exists(file)) {
-        const auto directory = dataDir + "/deleted-themes";
-        if (!QDir().mkpath(directory)) {
-            error = L("无法创建已删除主题目录。", "Cannot create the deleted-themes folder.");
+    try {
+        if (owned && !permanent) backup = runtime->library.recycle(file);
+        if (!storeConfig(dataDir, next, error)) {
+            if (!backup.isEmpty()) runtime->library.restore(backup);
             return false;
         }
-        const auto info = QFileInfo(file);
-        backup = directory + '/' + uid() + '-' + info.completeBaseName().left(40) + '.' + info.suffix();
-        QFile source(file);
-        if (!source.rename(backup)) {
-            error = L("无法移动主题文件：", "Cannot move the theme file: ") + source.errorString();
-            return false;
+        if (owned && permanent) {
+            try { runtime->library.purge(file); }
+            catch (...) { QString ignored; storeConfig(dataDir, config, ignored); throw; }
         }
-    }
-    auto nextConfig = config;
-    if (!personal) {
-        auto hidden = nextConfig["hidden_themes"].toArray();
-        if (!hidden.contains(key))
-            hidden.append(key);
-        nextConfig["hidden_themes"] = hidden;
-    }
-    nextConfig["external_themes"] = external;
-    auto directions = nextConfig["theme_orientations"].toObject();
-    for (const auto &direction : directionKeys)
-        directions.remove(direction);
-    nextConfig["theme_orientations"] = directions;
-    if (active) {
-        nextConfig["selected_theme"] = QString();
-        nextConfig["orientation"] = qBound(0, directions.value("__starter__").toInt(2), 3);
-    }
-    if (!storeConfig(dataDir, nextConfig, error)) {
-        error = L("无法保存主题库设置：", "Cannot save the theme library settings: ") + error;
-        if (!backup.isEmpty() && !QFile::rename(backup, file))
-            error += L("\n主题副本保留于：", "\nA copy of the theme is kept at: ") + backup;
-        return false;
-    }
-    config = nextConfig;
-    entries.erase(std::remove_if(entries.begin(), entries.end(), [&](const Entry &e) { return files.contains(e.path); }), entries.end());
-    if (active) {
-        sending = false;
-        choose({});
-    }
-    // Switching away stores a draft, so remove the deleted document afterwards.
-    for (const auto &related : files)
-        drafts.remove(related);
-    for (const auto &draft : draftKeys)
-        drafts.remove(draft);
-    buildLibrary();
+    } catch (const std::exception &e) { error = QString::fromUtf8(e.what()); return false; }
+    config = next;
+    if (active) { sending = false; choose({}); }
+    for (const auto &key : drafts.keys()) if (affected(drafts[key].path)) drafts.remove(key);
+    if (!libraryFolder.isEmpty() && !QFileInfo(libraryFolder).isDir()) libraryFolder = runtime->library.root;
+    reloadLibrary(); buildLibrary(); persist();
     return true;
 }
 void MainWindow::restoreBuiltinThemes() {
-    QJsonArray hidden;
-    for (const auto &value : config["hidden_themes"].toArray())
-        if (!value.toString().startsWith("builtin:"))
-            hidden.append(value);
-    auto restored = config;
-    restored["hidden_themes"] = hidden;
-    QString error;
-    if (!storeConfig(dataDir, restored, error)) {
-        QMessageBox::warning(this, L("恢复失败", "Restore failed"), error);
-        return;
-    }
-    config = restored;
-    reloadLibrary();
-    buildLibrary();
+    selectLibraryFolder(runtime->library.root + "/deleted");
 }
 void MainWindow::thumbnails() {
     if (!library || page != LibraryPage || !isVisible())
         return;
     int count = 0;
     std::unique_ptr<Renderer> thumbnailRenderer;
-    for (int n = 0; n < library->count() && count < 10; ++n) {
-        auto i = library->item(n);
+    const auto thumbnailIcon = [](const QPixmap &pixmap) {
+        QIcon icon(pixmap);
+        icon.addPixmap(pixmap, QIcon::Selected);
+        icon.addPixmap(pixmap, QIcon::Active);
+        return icon;
+    };
+    for (auto i : libraryItems) {
+        if (count >= 10) break;
         if (i->isHidden() || !library->visualItemRect(i).intersects(library->viewport()->rect()) ||
-            !i->icon().isNull())
+            !i->icon(0).isNull())
             continue;
         try {
-            auto file = i->data(Qt::UserRole).toString();
+            auto file = i->data(0, Qt::UserRole).toString();
             const QFileInfo info(file);
             const auto key = file + ':' + QString::number(info.lastModified().toMSecsSinceEpoch()) + ':' + QString::number(info.size());
             if (const auto cached = thumbnailCache.object(key)) {
-                i->setIcon(*cached);
+                i->setIcon(0, thumbnailIcon(*cached));
                 ++count;
                 continue;
             }
             if (!thumbnailRenderer) thumbnailRenderer = std::make_unique<Renderer>();
-            auto t = file.isEmpty() ? Theme::starter() : Theme::load(file);
+            auto t = Theme::load(file);
             const auto pixmap = QPixmap::fromImage(
                 thumbnailRenderer->render(t, sample).scaled(library->iconSize(), Qt::KeepAspectRatio, Qt::SmoothTransformation));
-            i->setIcon(pixmap);
+            i->setIcon(0, thumbnailIcon(pixmap));
             thumbnailCache.insert(key, new QPixmap(pixmap), int(pixmap.width() * pixmap.height() * 4));
             ++count;
         } catch (const std::exception &) {
@@ -1502,7 +1906,9 @@ void MainWindow::buildTree() {
             i->setText(0, o["name"].toString(o["kind"].toString()));
             i->setData(0, Qt::UserRole, o["id"].toString());
             i->setData(0, Qt::UserRole + 1, o["kind"].toString());
-            i->setToolTip(0, o["kind"].toString());
+            i->setToolTip(0, o["kind"].toString() + "\n" + (o["visible"].toBool(true)
+                ? L("可见 · 点击眼睛隐藏", "Visible · Click the eye to hide")
+                : L("隐藏 · 点击眼睛显示", "Hidden · Click the eye to show")));
             i->setFlags(i->flags() | Qt::ItemIsEditable | Qt::ItemIsUserCheckable | Qt::ItemIsDragEnabled |
                         Qt::ItemIsDropEnabled);
             i->setCheckState(0, o["visible"].toBool(true) ? Qt::Checked : Qt::Unchecked);
@@ -1604,18 +2010,18 @@ void MainWindow::propertyEdited() {
         t.data["layers"] = a;
     });
 }
-void MainWindow::mutate(const std::function<void(Theme &)> &fn) {
+void MainWindow::mutate(const std::function<void(Theme &)> &fn, bool rebuildLayers) {
     auto before = theme.data;
     try {
         fn(theme);
         theme.validate();
-        remember(before);
+        remember(before, rebuildLayers);
     } catch (const std::exception &e) {
         theme.data = before;
         QMessageBox::warning(this, L("操作失败", "Operation failed"), QString::fromUtf8(e.what()));
     }
 }
-void MainWindow::remember(QJsonObject before) {
+void MainWindow::remember(QJsonObject before, bool rebuildLayers) {
     if (before == theme.data)
         return;
     undoHistory.append(before);
@@ -1630,7 +2036,7 @@ void MainWindow::remember(QJsonObject before) {
         undoHistory.removeFirst();
     }
     dirty = theme.data != saved;
-    buildTree();
+    if (rebuildLayers) buildTree();
     properties();
     render();
 }
@@ -1652,7 +2058,8 @@ void MainWindow::redo() {
     dirty = theme.data != saved;
     render();
 }
-void MainWindow::choose(const QString &file) {
+void MainWindow::choose(const QString &requested) {
+    const auto file = requested.isEmpty() ? runtime->library.defaultThemeFile() : runtime->library.resolve(requested, dataDir);
     if (file == path && !file.isEmpty())
         return;
     QString old = path.isEmpty() ? QString("__starter__") : path;
@@ -1670,7 +2077,8 @@ void MainWindow::choose(const QString &file) {
             undoHistory = d.undo;
             redoHistory = d.redo;
         } else {
-            theme = file.isEmpty() ? Theme::starter() : Theme::load(file);
+            theme = Theme::load(file);
+            if (file.endsWith(".data", Qt::CaseInsensitive)) theme.data["name"] = QFileInfo(file).completeBaseName();
             path = file;
             saved = theme.data;
             undoHistory.clear();
@@ -1686,9 +2094,11 @@ void MainWindow::choose(const QString &file) {
         updateThemeActions();
         {
             const QSignalBlocker blocker(library);
-            for (int n = 0; n < library->count(); ++n)
-                if (libraryKey(library->item(n)->data(Qt::UserRole).toString()) == libraryKey(path)) {
-                    library->setCurrentItem(library->item(n));
+            for (auto item : libraryItems)
+                if (libraryKey(item->data(0, Qt::UserRole).toString()) == libraryKey(path)) {
+                    library->setCurrentItem(item);
+                    for (auto parent = item->parent(); parent; parent = parent->parent()) parent->setExpanded(true);
+                    library->scrollToItem(item);
                     break;
                 }
         }
@@ -1699,7 +2109,7 @@ void MainWindow::choose(const QString &file) {
     }
 }
 void MainWindow::newTheme() {
-    auto file = dataDir + "/themes/" + uid() + ".json";
+    auto file = runtime->library.unique(targetLibraryFolder(), L("新主题", "New theme") + ".json");
     Theme t;
     t.data = {{"format", "turing-screen-qt"},
               {"version", 1},
@@ -1714,20 +2124,22 @@ void MainWindow::newTheme() {
 }
 void MainWindow::importTheme() {
     auto file =
-        QFileDialog::getOpenFileName(this, L("导入主题", "Import theme"), {}, "Themes (*.data *.json)");
+        QFileDialog::getOpenFileName(this, L("导入主题", "Import theme"), {}, L("主题文件 (*.data *.json)", "Theme files (*.data *.json)"));
     if (!file.isEmpty()) {
-        choose(file);
-        buildLibrary();
+        try {
+            auto imported = Theme::load(file);
+            auto target = runtime->library.unique(targetLibraryFolder(), QFileInfo(file).completeBaseName() + ".json");
+            imported.save(target);
+            choose(target); reloadLibrary(); buildLibrary();
+        } catch (const std::exception &e) { QMessageBox::warning(this, L("导入失败", "Import failed"), QString::fromUtf8(e.what())); }
     }
 }
 void MainWindow::saveTheme(bool as) {
     auto target = path;
-    const bool builtin = QFileInfo(target).absoluteFilePath().startsWith(
-        QDir(assets() + "/themes").absolutePath() + '/');
-    if (as || builtin || target.isEmpty() || !theme.data.contains("format") || target.endsWith(".data"))
-        target =
-            QFileDialog::getSaveFileName(this, L("保存主题", "Save theme"),
-                                         dataDir + "/themes/" + theme.name() + ".json", "Theme JSON (*.json)");
+    if (target.isEmpty() || !managedTheme(target) || builtinTheme(target) || target.endsWith(".data"))
+        target = runtime->library.unique(runtime->library.root + "/custom", (ThemeLibrary::validName(theme.name()) ? theme.name() : uid()) + ".json");
+    if (as) target = QFileDialog::getSaveFileName(this, L("保存主题", "Save theme"),
+        targetLibraryFolder() + '/' + theme.name() + ".json", "Theme JSON (*.json)");
     if (target.isEmpty())
         return;
     try {
@@ -2000,7 +2412,7 @@ void MainWindow::contextMenu(QPoint global) {
     auto create = m.addMenu(L("新建图层", "New layer"));
     for (auto k : {"text", "sensor", "image", "rectangle", "ellipse", "line", "bar", "arc", "group"})
         create->addAction(QString::fromLatin1(k), this, [this, k] { createLayer(QString::fromLatin1(k)); });
-    m.addAction(L("重命名 F2", "Rename F2"), this, &MainWindow::rename);
+    m.addAction(L("重命名", "Rename"), this, &MainWindow::rename);
     for (auto p : QList<QPair<QString, QString>>{{"copy", L("复制", "Copy")},
                                                  {"paste", L("粘贴", "Paste")},
                                                  {"duplicate", L("复制图层", "Duplicate")},
@@ -2019,6 +2431,12 @@ void MainWindow::tick() {
     runtime->tick();
 }
 void MainWindow::refreshRuntimeUi() {
+    updateWeatherStatus();
+    for (auto toggle : findChildren<QCheckBox *>()) {
+        if (!toggle->property("collectionToggle").toBool()) continue;
+        const QSignalBlocker blocker(toggle);
+        toggle->setChecked(runtime->collectionEnabled());
+    }
     if (!frame.isNull()) {
         canvas->mirrored = config["mirror"].toBool();
         canvas->setFrame(frame);
@@ -2027,6 +2445,8 @@ void MainWindow::refreshRuntimeUi() {
     }
     title->setText(theme.name() + (dirty ? " *" : ""));
     title->setToolTip(title->text());
+    editorThemeTitle->setText(title->text());
+    editorThemeTitle->setToolTip(title->text());
     resolution->setText(QString("%1 × %2 · %3").arg(theme.size().width()).arg(theme.size().height())
                            .arg(theme.size().width() > 320 ? L("横屏", "Landscape") : L("竖屏", "Portrait")));
     undoAction->setEnabled(!undoHistory.isEmpty());
@@ -2127,11 +2547,14 @@ void MainWindow::updateStatus() {
     for (auto w : findChildren<QToolButton *>())
         if (w->property("deviceOperation").toBool())
             w->setEnabled(s.connected);
-    dataState->setText("● " + L("本机数据采集中", "Local collection active"));
-    connection->setText(
-        "● " + (s.connected ? L("设备已连接", "Device connected") : L("设备未连接", "Device disconnected")));
-    sendState->setText(sending && s.connected ? L("画面发送中", "Sending frames")
-                                              : L("画面发送已暂停", "Sending paused"));
+    const bool collecting = sampling.isActive();
+    static_cast<StatusLabel *>(dataState)->setState(collecting ? L("本机数据采集中", "Local collection active")
+        : L("本机采集已暂停", "Local collection paused"), collecting ? "success" : "muted");
+    static_cast<StatusLabel *>(connection)->setState(s.connected ? L("设备已连接", "Device connected")
+        : s.connecting ? L("设备连接中", "Connecting device") : L("设备未连接", "Device disconnected"),
+        s.connected ? "success" : s.connecting ? "warning" : "muted");
+    static_cast<StatusLabel *>(sendState)->setState(sending && s.connected ? L("画面发送中", "Sending frames")
+        : L("画面发送已暂停", "Sending paused"), sending && s.connected ? "success" : "muted");
     status->setText(s.message);
 }
 void MainWindow::persist() {
@@ -2205,21 +2628,6 @@ void MainWindow::closeEvent(QCloseEvent *e) {
     quitting = true;
     e->accept();
     qApp->quit();
-}
-QJsonObject MainWindow::diagnostics() const {
-    auto &d = const_cast<Device &>(device);
-    auto s = d.status();
-    return {{"application", "Turing Screen"},
-            {"version", SCREEN_VERSION},
-            {"ui_runtime_version", qVersion()},
-            {"platform", QSysInfo::prettyProductName()},
-            {"configuration", config},
-            {"snapshot", sample.json()},
-            {"process", processStats().json()},
-            {"device", QJsonObject{{"connected", s.connected},
-                                   {"message", s.message},
-                                   {"frames", double(s.frames)},
-                                   {"bytes", double(s.bytes)}}}};
 }
 void MainWindow::recordResource() {
     auto row = processStats().json();
@@ -2319,38 +2727,38 @@ void MainWindow::runSmoke(const QString &dir, bool stress, int seconds) {
                 workloadStage = "steady";
             }
         } else {
-            static const char *names[]{"library", "editor", "sensors", "settings", "diagnostics",
+            static const char *names[]{"library", "editor", "sensors", "settings",
                                        "compact-library", "compact-editor", "compact-properties", "english",
                                        "expanded-library", "expanded-editor", "settings-auto-lightweight"};
-            if (n < 12) {
+            if (n < 11) {
                 if (n < PageCount)
                     setPage(n);
-                if (n == 5) {
+                if (n == 4) {
                     resize(760, 680);
                     setPage(LibraryPage);
                 }
-                if (n == 6)
+                if (n == 5)
                     setPage(EditorPage);
-                if (n == 7) {
+                if (n == 6) {
                     inspectorTabs->setCurrentIndex(1);
                     if (!theme.layers().isEmpty())
                         selection({theme.layers().first().toObject()["id"].toString()});
                 }
-                if (n == 8) {
+                if (n == 7) {
                     resize(1280, 820);
                     english = true;
                     build();
                     render();
                 }
-                if (n == 9) {
+                if (n == 8) {
                     english = false;
                     build();
                     setSidebarExpanded(true);
                     setPage(LibraryPage);
                 }
-                if (n == 10)
+                if (n == 9)
                     setPage(EditorPage);
-                if (n == 11) {
+                if (n == 10) {
                     setPage(SettingsPage);
                     findChild<QCheckBox *>("autoLightweight")->setChecked(true);
                     findChild<QSpinBox *>("lightweightDelay")->setValue(0);
@@ -2359,8 +2767,8 @@ void MainWindow::runSmoke(const QString &dir, bool stress, int seconds) {
                 QTimer::singleShot(100, this, [this, dir, n, timer] {
                     grab().save(dir + "/" + names[n] + ".png");
                     QJsonArray positions;
-                    for (int i = 0; i < qMin(6, library->count()); ++i) {
-                        const auto rect = library->visualItemRect(library->item(i));
+                    for (int i = 0; i < qMin(6, libraryItems.size()); ++i) {
+                        const auto rect = library->visualItemRect(libraryItems.at(i));
                         positions.append(QJsonObject{{"x", rect.x()}, {"y", rect.y()},
                                                      {"width", rect.width()}, {"height", rect.height()}});
                     }
@@ -2368,8 +2776,7 @@ void MainWindow::runSmoke(const QString &dir, bool stress, int seconds) {
                     if (layoutFile.open(QIODevice::WriteOnly))
                         layoutFile.write(QJsonDocument(QJsonObject{
                             {"viewport_width", library->viewport()->width()},
-                            {"grid_width", library->gridSize().width()},
-                            {"flow", int(library->flow())}, {"wrapping", library->isWrapping()},
+                            {"columns", library->columnCount()}, {"wrapping", false},
                             {"items", positions}}).toJson());
                     timer->start();
                 });

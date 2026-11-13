@@ -22,7 +22,7 @@ try {
     $taskReport=Get-Content "$taskOutput/resources.json" -Raw | ConvertFrom-Json
     [pscustomobject]@{mode=$taskMode;resident_MB=[math]::Round($taskReport.peak_resident_bytes/1000000,2);private_MB=[math]::Round($taskReport.peak_private_bytes/1000000,2);idle_CPU_total=[math]::Round($taskReport.idle_cpu_percent_total,3);switches=$taskReport.theme_switches;edits=$taskReport.edits}
     if(!$taskReport.passed){throw '100 MB resident memory target exceeded'}
-    $taskReference=Join-Path $taskRoot 'assets/official/config/微星.data'
+    $taskReference=Join-Path $taskRoot 'assets/themes/official/微星.data'
     $taskRender=Start-Process -FilePath $Binary -ArgumentList '--render-theme',$taskReference,'--output',"$taskOutput/msi.png",'--snapshot','tests/fixtures/official-editor.json','--editor-preview' -WindowStyle Hidden -PassThru -Wait
     if(!(Test-Path "$taskOutput/msi.png")){throw 'Reference theme render failed'}
 } finally {Pop-Location}

@@ -1,0 +1,26 @@
+{
+  "format": "turing-ui-palette",
+  "version": 1,
+  "name": "Dracula Alucard",
+  "mode": "light",
+  "order": 21,
+  "source": "https://github.com/dracula/dracula-theme",
+  "colors": {
+    "window": "#fffbeb",
+    "base": "#fffbeb",
+    "button": "#cfcfde",
+    "alternate_base": "#cfcfde",
+    "text": "#1f1f1f",
+    "muted": "#6c664b",
+    "border": "#6c664b",
+    "accent": "#644ac9",
+    "accent_text": "#fffbeb",
+    "link": "#036a96",
+    "tooltip": "#fffbeb",
+    "tooltip_text": "#1f1f1f",
+    "disabled_text": "#6c664b",
+    "success": "#14710a",
+    "warning": "#846e15",
+    "error": "#cb3a2a"
+  }
+}

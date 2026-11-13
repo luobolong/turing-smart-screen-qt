@@ -1,0 +1,14 @@
+/* Tray menus have their own neutral palette, independent of the app theme. */
+QMenu {
+    background: @background@; color: @text@;
+    border: 1px solid @border@; border-radius: 4px;
+    padding: 4px 2px; min-width: 174px;
+}
+QMenu::item {
+    padding: 5px 28px 5px 26px; margin: 0 2px;
+    background: transparent; color: @text@; border-radius: 4px;
+}
+QMenu::item:selected { background: @hover@; color: @text@; }
+QMenu::item:disabled { color: @disabled_text@; }
+QMenu::separator { height: 1px; background: @border@; margin: 4px 6px; }
+QMenu::right-arrow { width: 12px; height: 12px; }
