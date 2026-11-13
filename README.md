@@ -32,7 +32,28 @@
 - 天气可在设置中开启并填写城市，留空使用 ipwho.is 按 IP 粗略定位（代理可能影响位置）。数据来自 [Open-Meteo](https://open-meteo.com/)，每 10 分钟更新；失败后退避重试，缓存最多保留 30 分钟。Nightfall 在未明确关闭天气时默认启用，其余主题默认关闭。城市名、温度、天气状况与天气图标可分别绑定；天气文字使用英文，图标随当前天气变化。
 - `LocalIp` 显示活动网卡的本机 IP，优先 IPv4 和默认路由网卡；没有 IPv4 时使用非链路本地 IPv6。地址随采样更新，来源中记录网卡名，无可用地址时显示 `--`。
 
-Windows GPU 采集、NVIDIA / Intel GPU 采集、Windows 硬件温度 / 风扇助手尚未实现；Linux 未由驱动提供的传感器也无法在应用中直接获取。随附主题中的 CPU / GPU 风扇、CPU 功耗、显存使用率等指标已注册，可在属性中绑定。音量兼容旧主题 `VulomeLoad` 及 `VolumeLoad` 名称。Windows / Linux 支持设置中的登录自启动，NixOS 也支持下文的声明式 systemd 模块；其他精简范围：GIF 动画、Photoshop 高级图像处理。官方 `.data` 只读导入；修改保存为独立 JSON。
+Windows 可在设置中选择 HWiNFO、AIDA64 或 LibreHardwareMonitor 获取 CPU / GPU 温度、实时核心频率、功耗、风扇及显存等数据，配置方法见下文。Linux 未由驱动提供的传感器也无法在应用中直接获取，Linux NVIDIA / Intel GPU 采集尚未实现。随附主题中的 CPU / GPU 风扇、CPU 功耗、显存使用率等指标已注册，可在属性中绑定。音量兼容旧主题 `VulomeLoad` 及 `VolumeLoad` 名称。Windows / Linux 支持设置中的登录自启动，NixOS 也支持下文的声明式 systemd 模块；其他精简范围：GIF 动画、Photoshop 高级图像处理。官方 `.data` 只读导入；修改保存为独立 JSON。
+
+## Windows 采集来源
+
+“设置 → Windows 传感器 → 采集数据来源”提供以下选项，切换立即生效并保存；登录启动、轻量模式也使用同一配置。第三方软件需由用户安装、配置并保持运行，安装本程序不会同时安装这些软件或驱动。
+
+- **仅系统数据**（默认）：CPU 使用率、内存、网络等继续使用 Windows API。系统接口的 `CurrentMhz` 无法可靠反映睿频，因此此模式的 CPU 频率、温度和 GPU 指标显示 `--`，并提示配置来源。
+- **HWiNFO**：运行 [HWiNFO](https://www.hwinfo.com/download/) 的 Sensors，开启设置中的 **Shared Memory Support**。本程序读取 `Global\HWiNFO_SENS_SM2`。免费版共享内存连续运行限 12 小时，超时需手动重新开启；长期常开可使用 Pro。本程序不会自动重启 HWiNFO 或规避该限制。
+- **AIDA64**：运行 [AIDA64](https://www.aida64.com/downloads/)，在 **设置 → 硬件监控 → 外部程序**中勾选 **启用共享内存 / Enable shared memory**，并在列表中勾选所需 CPU、GPU 和显存指标。本程序读取 `AIDA64_SensorValues`，兼容 ANSI 和 UTF-16 输出。试用版可能不输出部分数值；AIDA64 未导出的显卡型号保持 `--`。
+- **LibreHardwareMonitor**：运行 [LibreHardwareMonitor](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor/releases)，启用 **Options → Remote Web Server → Run**，端口与设置中的 **LHM 本机端口**一致（默认 `8085`）。只读取 `http://127.0.0.1:<端口>/data.json`，不经过系统代理，不发送控制或调速请求。不需要本程序启动 PowerShell 或 .NET 助手。LHM 的硬件监控本身可能需要管理员权限以及对应版本的驱动；先确认 LHM 中能看到温度等数据。支持数值和旧版本带单位的 JSON，HTTP 身份验证需关闭，否则会显示连接失败。
+
+显卡序号从 1 开始，按所选来源枚举顺序选择；每个来源的顺序可能不同，来源栏可确认具体硬件。CPU 频率取**本次采样中最高的普通核心时钟**，可反映睿频，不使用历史最高值、总线频率或有效频率替代。CPU 温度优先 Package / Tctl/Tdie。仅接收 RPM 风扇读数，百分比控制量不会显示成 RPM；显存统一换算为字节后交给主题格式化。
+
+传感器页及诊断 JSON 保留每项来源或不可用原因。来源未启动、共享内存关闭、权限不足、HTTP 失败、HWiNFO 采样超过 30 秒未更新时显示 `--`，切换来源或显卡也会清除旧数据，不回退到另一块显卡或基准 CPU 频率。CPU 使用率在第三方未提供时仍可使用系统读数；内存、网络、音量和天气继续使用现有采集。数据覆盖取决于硬件、驱动及第三方软件实际导出的指标。
+
+命令行排查会使用数据目录中保存的来源，也可临时覆盖（不修改设置）：
+
+```powershell
+./turing-screen-qt.exe --dump-sensors --windows-sensor-source hwinfo
+./turing-screen-qt.exe --dump-sensors --windows-sensor-source aida64
+./turing-screen-qt.exe --dump-sensors --windows-sensor-source librehardwaremonitor --lhm-port 8085 --gpu-index 0
+```
 
 ## 夜航主题与组合编辑
 
@@ -42,7 +63,9 @@ Windows GPU 采集、NVIDIA / Intel GPU 采集、Windows 硬件温度 / 风扇�
 
 系统图标区域为 48×48 像素，版本文字与图标留有间距；系统版本最大字号为 15，长系统名和内核号在各自区域内自动缩小字号，保持固定基线并避免遮挡时钟。
 
-CPU / GPU 图标及标签在标题行左侧，固定型号 `AMD Ryzen 7 9800X3D` / `AMD Radeon RX 7900 XT` 在右侧；可在图层中编辑文字。使用率 / 温度行上移，CPU 主频在该行下边缘至面板内边距下边缘之间垂直居中。GPU 不显示主频，功耗与风扇同排，显存 GB 单独一行、下方为用量条，不显示显存百分比。RAM 显示已用 / 总量 GB 和用量条，不显示百分比；网络标题为镂空地球 Unicode 图标及 NET，右侧本机 IP 使用 11 像素、右对齐，上下行数值均为 16 像素、速率自动选择单位。无音量、磁盘状态栏或 NIGHTFALL 标识。所有字体和 Unicode 图标均随程序提供，缺失数值保持 `--`，天气尚未加载时不显示图标。
+CPU / GPU 图标及标签在标题行左侧，固定型号 `AMD Ryzen 7 9800X3D` / `AMD Radeon RX 7900 XT` 在右侧；可在图层中编辑文字。使用率 / 温度行上移，CPU 主频在该行下边缘至面板内边距下边缘之间垂直居中。GPU 不显示主频，功耗与风扇同排，显存 GB 单独一行、下方为用量条，不显示显存百分比。RAM 标题右侧显示实际内存规格，如 `DDR4/3200MHz`、`DDR5/6200MHz`，下方保留已用 / 总量 GB 和用量条，不显示百分比；网络标题为镂空地球 Unicode 图标及 NET，右侧本机 IP 使用 11 像素、右对齐，上下行数值均为 16 像素、速率自动选择单位。无音量、磁盘状态栏或 NIGHTFALL 标识。所有字体和 Unicode 图标均随程序提供，缺失数值保持 `--`，天气尚未加载时不显示图标。
+
+`RamSpec` 从 SMBIOS Type 17 读取 DDR 类型和已配置速率，启动时采集一次，独立于 Windows 第三方采集来源。Windows 使用原生固件表接口；Linux 读取 `/sys/firmware/dmi/tables/DMI`，需要系统允许当前用户读取。数值优先反映已配置速率，不使用内存条额定速度替代；按照主题要求显示 MHz 后缀，该数值对应 DDR 有效传输速率（例如 3200 MT/s，而非 1600 MHz 基础时钟）。固件未报告、权限不足或多个模块报告不一致时显示 `--`，诊断中保留原因。
 
 `OsIcon` / `OsName` / `KernelVersion` 在 NixOS 显示 NixOS 图标、版本及 Linux 内核；Windows 显示 Windows 图标、精简系统名（例如 `Windows 11 26H2`，不带 Pro / Home）及 NT 内核版本。发行版本从本机注册表 `DisplayVersion` 读取，未提供时不添加猜测的发行标签；内核从 [QSysInfo 系统接口](https://doc.qt.io/qt-6/qsysinfo.html#kernelVersion)读取，可取得且构建号一致时附带更新修订号。Windows 发布脚本包含 [Schannel TLS 插件](https://doc.qt.io/qt-6/ssl.html)，供天气 HTTPS 使用。当前修订的 Windows 系统名 / 图标 / 布局已通过模拟数据检查，尚未在 Windows 实机复测；GPU 与硬件传感器采集限制见上文。
 

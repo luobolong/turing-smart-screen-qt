@@ -22,6 +22,7 @@ public:
     bool sending = false, preview = false, lightweight = false;
     quint64 renderedFrames = 0;
     void configureWeather();
+    void configureSensors();
     void setLightweight(bool value);
     void startSending();
     void tick();

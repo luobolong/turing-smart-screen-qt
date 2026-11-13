@@ -259,6 +259,13 @@ void MainWindow::build() {
     sideAction(L("轻量模式", "Lightweight mode"), QStyle::SP_TitleBarMinButton, "sidebarLightweight",
                [this] { emit lightweightRequested(); });
     shell->addWidget(sidebar);
+    auto sidebarSeparator = new QFrame;
+    sidebarSeparator->setObjectName("sidebarSeparator");
+    sidebarSeparator->setFrameShape(QFrame::VLine);
+    sidebarSeparator->setFrameShadow(QFrame::Plain);
+    sidebarSeparator->setLineWidth(1);
+    sidebarSeparator->setFixedWidth(1);
+    shell->addWidget(sidebarSeparator);
     auto content = new QWidget;
     content->setObjectName("mainContent");
     auto outer = new QVBoxLayout(content);
@@ -967,6 +974,64 @@ void MainWindow::buildSettings(QWidget *w) {
     weatherCredit->setWordWrap(true);
     form->addRow(weatherCredit);
     outer->addWidget(group);
+#ifdef Q_OS_WIN
+    auto sensorsGroup = new QGroupBox(L("Windows 传感器", "Windows sensors"));
+    auto sensorsForm = new QFormLayout(sensorsGroup);
+    sensorsForm->setRowWrapPolicy(QFormLayout::WrapLongRows);
+    auto source = new QComboBox;
+    source->setObjectName("windowsSensorSource");
+    source->addItem(L("仅系统数据", "System data only"), "system");
+    source->addItem("HWiNFO", "hwinfo");
+    source->addItem("AIDA64", "aida64");
+    source->addItem("LibreHardwareMonitor", "librehardwaremonitor");
+    source->setCurrentIndex(qMax(0, source->findData(windowsSensorSource(config["windows_sensor_source"].toString()))));
+    sensorsForm->addRow(L("采集数据来源", "Sensor data source"), source);
+    auto gpuIndex = new QSpinBox;
+    gpuIndex->setObjectName("windowsGpuIndex");
+    gpuIndex->setRange(1, 32);
+    gpuIndex->setValue(qBound(1, config["windows_gpu_index"].toInt(0) + 1, 32));
+    sensorsForm->addRow(L("显卡序号", "GPU number"), gpuIndex);
+    auto lhmPort = new QSpinBox;
+    lhmPort->setObjectName("lhmPort");
+    lhmPort->setRange(1, 65535);
+    lhmPort->setValue(qBound(1, config["lhm_port"].toInt(8085), 65535));
+    sensorsForm->addRow(L("LHM 本机端口", "LHM local port"), lhmPort);
+    auto sourceHint = new QLabel;
+    sourceHint->setObjectName("windowsSensorHint");
+    sourceHint->setWordWrap(true);
+    sourceHint->setOpenExternalLinks(true);
+    sensorsForm->addRow(sourceHint);
+    const auto updateSourceUi = [this, source, gpuIndex, lhmPort, sensorsForm, sourceHint] {
+        const auto value = source->currentData().toString();
+        sensorsForm->setRowVisible(lhmPort, value == "librehardwaremonitor");
+        sensorsForm->setRowVisible(gpuIndex, value != "system");
+        if (value == "hwinfo") sourceHint->setText(L(
+            "运行 <a href=\"https://www.hwinfo.com/download/\">HWiNFO</a>，开启 Sensors 和 Shared Memory Support。免费版共享内存连续运行限 12 小时，长期常开请使用 Pro。",
+            "Run <a href=\"https://www.hwinfo.com/download/\">HWiNFO</a> Sensors and enable Shared Memory Support. Free shared memory is limited to 12 continuous hours; use Pro for continuous operation."));
+        else if (value == "aida64") sourceHint->setText(L(
+            "运行 <a href=\"https://www.aida64.com/downloads\">AIDA64</a>，在设置 → 硬件监控 → 外部程序中启用共享内存，并勾选所需指标。试用版可能限制部分数据。",
+            "Run <a href=\"https://www.aida64.com/downloads\">AIDA64</a>. In Preferences → Hardware Monitoring → External Applications, enable shared memory and select the required sensors. Trial editions may restrict values."));
+        else if (value == "librehardwaremonitor") sourceHint->setText(L(
+            "运行 <a href=\"https://github.com/LibreHardwareMonitor/LibreHardwareMonitor/releases\">LibreHardwareMonitor</a>，启用 Options → Remote Web Server → Run，并将端口设为上方数值。温度等指标可能需要管理员权限及对应驱动。本程序只读取 127.0.0.1。",
+            "Run <a href=\"https://github.com/LibreHardwareMonitor/LibreHardwareMonitor/releases\">LibreHardwareMonitor</a>. Enable Options → Remote Web Server → Run with the port above. Hardware sensors may require administrator privileges and the appropriate driver. Only 127.0.0.1 is queried."));
+        else sourceHint->setText(L("系统来源提供 CPU 使用率、内存和网络等数据。温度、GPU 和实时 CPU 频率需选择第三方来源。",
+            "The system source provides CPU usage, memory and networking. Select a third-party source for temperature, GPU and live CPU clocks."));
+    };
+    const auto applySource = [this, source, gpuIndex, lhmPort, updateSourceUi] {
+        config["windows_sensor_source"] = source->currentData().toString();
+        config["windows_gpu_index"] = gpuIndex->value() - 1;
+        config["lhm_port"] = lhmPort->value();
+        runtime->configureSensors();
+        updateSourceUi();
+        persist();
+        tick();
+    };
+    updateSourceUi();
+    connect(source, &QComboBox::currentIndexChanged, this, applySource);
+    connect(gpuIndex, &QSpinBox::valueChanged, this, applySource);
+    connect(lhmPort, &QSpinBox::valueChanged, this, applySource);
+    outer->addWidget(sensorsGroup);
+#endif
     outer->addStretch();
     auto buttons = new QHBoxLayout;
     button(L("打开数据目录", "Open data folder"), buttons,

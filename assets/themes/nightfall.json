@@ -1331,9 +1331,41 @@
                     "text": "RAM",
                     "valign": "bottom",
                     "visible": true,
-                    "w": 52,
+                    "w": 38,
                     "x": 34,
                     "y": 5
+                },
+                {
+                    "align": "right",
+                    "baseline": 15,
+                    "clip": true,
+                    "elide": true,
+                    "font": {
+                        "bold": false,
+                        "color": [
+                            162,
+                            178,
+                            198,
+                            255
+                        ],
+                        "family": "Turing Screen Latin",
+                        "size": 11,
+                        "spacing": 0
+                    },
+                    "h": 19,
+                    "id": "nightfall-ram-spec",
+                    "kind": "sensor",
+                    "length": 0,
+                    "locked": false,
+                    "long_text": true,
+                    "metric": "RamSpec",
+                    "name": "ram-spec",
+                    "text": "",
+                    "valign": "bottom",
+                    "visible": true,
+                    "w": 132,
+                    "x": 78,
+                    "y": 8
                 },
                 {
                     "align": "left",

@@ -5,6 +5,8 @@
 #include "linuxhardware.h"
 #include "weather.h"
 #include "systeminfo.h"
+#include "memoryinfo.h"
+#include <QtEndian>
 #include <QDirIterator>
 #include <QJsonDocument>
 #include <QTemporaryDir>
@@ -357,7 +359,7 @@ private slots:
                                    "Volume", "GpuFreq", "GpuRamLoad", "CpuModel", "GpuModel"})
             QVERIFY(!bound.contains(removed));
         for (const auto &required : {"OsName", "OsIcon", "KernelVersion", "WeatherCity", "WeatherTemp", "WeatherCondition",
-                                    "WeatherIcon", "DateWeekday", "LocalIp"})
+                                    "WeatherIcon", "DateWeekday", "LocalIp", "RamSpec"})
             QVERIFY(bound.contains(required));
         QCOMPARE(findLayer(theme.layers(), "nightfall-cpu-model")["text"].toString(), QString("AMD Ryzen 7 9800X3D"));
         QCOMPARE(findLayer(theme.layers(), "nightfall-gpu-model")["text"].toString(), QString("AMD Radeon RX 7900 XT"));
@@ -384,6 +386,7 @@ private slots:
         longValues.strings["CpuModel"] = QString(200, 'M');
         longValues.strings["GpuModel"] = QString(200, 'M');
         longValues.strings["RamUsage"] = QString(200, 'M');
+        longValues.strings["RamSpec"] = QString(200, 'M');
         longValues.values["InternetDown"] = 1e15;
         Renderer renderer;
         const auto image = renderer.render(theme, longValues);
@@ -391,6 +394,44 @@ private slots:
         for (int y = 70; y < 292; ++y)
             for (int x = 237; x < 244; ++x)
                 QCOMPARE(image.pixelColor(x, y), QColor("#0B1018"));
+    }
+    void memoryDdrTypeAndConfiguredSpeed() {
+        const auto module = [](quint8 type, quint16 configured, quint16 rated = 2400) {
+            QByteArray bytes(0x5c, '\0');
+            bytes[0] = 17; bytes[1] = 0x5c;
+            qToLittleEndian(quint16(16384), bytes.data() + 0x0c);
+            bytes[0x12] = char(type);
+            qToLittleEndian(rated, bytes.data() + 0x15);
+            qToLittleEndian(configured, bytes.data() + 0x20);
+            bytes.append("\0\0", 2);
+            return bytes;
+        };
+        const auto ddr4 = module(0x1a, 3200);
+        QCOMPARE(parseMemoryInfo(ddr4).specification, QString("DDR4/3200MHz"));
+        const auto ddr5 = module(0x22, 6200, 4800);
+        QCOMPARE(parseMemoryInfo(ddr5 + ddr5).specification, QString("DDR5/6200MHz"));
+        auto empty = module(0, 0);
+        qToLittleEndian(quint16(0), empty.data() + 0x0c);
+        QCOMPARE(parseMemoryInfo(empty + ddr4).specification, QString("DDR4/3200MHz"));
+        auto extended = module(0x22, 0xffff);
+        qToLittleEndian(quint32(70000), extended.data() + 0x58);
+        QCOMPARE(parseMemoryInfo(extended).specification, QString("DDR5/70000MHz"));
+        const auto unknown = parseMemoryInfo(module(0x1a, 0, 3200));
+        QVERIFY(unknown.specification.isEmpty()); // Rated SPD speed must not substitute for the configured speed.
+        QVERIFY(!unknown.error.isEmpty());
+        QVERIFY(parseMemoryInfo(ddr4 + ddr5).specification.isEmpty());
+        QVERIFY(parseMemoryInfo(ddr4.left(40)).specification.isEmpty());
+        QVERIFY(parseMemoryInfo(ddr4.left(ddr4.size() - 1)).specification.isEmpty());
+        Snapshot sample;
+        sample.strings["RamSpec"] = parseMemoryInfo(ddr4).specification;
+        QCOMPARE(sample.text("RamSpec"), QString("DDR4/3200MHz"));
+        const auto theme = Theme::load(assets() + "/themes/nightfall.json");
+        const auto heading = findLayer(theme.layers(), "nightfall-ram-heading");
+        const auto spec = findLayer(theme.layers(), "nightfall-ram-spec");
+        QCOMPARE(spec["y"].toDouble() + spec["baseline"].toDouble(), heading["y"].toDouble() + heading["baseline"].toDouble());
+        QVERIFY(spec["x"].toDouble() >= heading["x"].toDouble() + heading["w"].toDouble());
+        QFont font(latinFontFamily()); font.setPixelSize(spec["font"].toObject()["size"].toInt());
+        QVERIFY(QFontMetricsF(font).horizontalAdvance("DDR5/6200MHz") <= spec["w"].toDouble());
     }
     void systemIdentityFormatting_data() {
         QTest::addColumn<QString>("product");

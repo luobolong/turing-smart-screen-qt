@@ -40,6 +40,7 @@ DisplayRuntime::DisplayRuntime(QString directory, const QString &initialTheme)
     if (direction.isDouble() && direction.toInt(-1) >= 0 && direction.toInt(-1) <= 3 &&
         direction.toDouble() == direction.toInt()) theme.data["orientation"] = direction.toInt();
     configureWeather();
+    configureSensors();
     connect(&sampling, &QTimer::timeout, this, &DisplayRuntime::tick);
     connect(&device, &Device::statusChanged, this, [this] {
         // Lightweight autostart starts sending before the asynchronous serial
@@ -55,6 +56,10 @@ void DisplayRuntime::configureWeather() {
     collector.setWeather(!backgroundIdle && (!lightweight || usesMetric(theme.layers(), "Weather")) &&
                          config["weather_enabled"].toBool(options["enabled"].toBool()),
                          config["weather_city"].toString(options["city"].toString()));
+}
+void DisplayRuntime::configureSensors() {
+    collector.setWindowsSource(config["windows_sensor_source"].toString("system"),
+                               config["lhm_port"].toInt(8085), config["windows_gpu_index"].toInt(0));
 }
 void DisplayRuntime::setLightweight(bool value) {
     lightweight = value;
@@ -91,6 +96,7 @@ void DisplayRuntime::tick() {
         return;
     }
     if (backgroundIdle) setLightweight(lightweight);
+    configureSensors();
     sample = collector.collect(config["disk"].toString());
     if (preview || (sending && device.status().connected)) render();
     else emit updated();

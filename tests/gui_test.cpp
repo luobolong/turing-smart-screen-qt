@@ -49,6 +49,44 @@ static void dragCanvas(Canvas &canvas, QPointF from, QPointF to,
 class GuiTest : public QObject {
     Q_OBJECT
 private slots:
+#ifdef Q_OS_WIN
+    void windowsSensorSourcePersistsAndAppliesImmediately() {
+        TestProfile dir;
+        {
+            MainWindow w(dir.path());
+            w.sampling.stop();
+            w.setPage(MainWindow::SettingsPage);
+            auto source = w.findChild<QComboBox *>("windowsSensorSource");
+            auto gpu = w.findChild<QSpinBox *>("windowsGpuIndex");
+            auto port = w.findChild<QSpinBox *>("lhmPort");
+            auto hint = w.findChild<QLabel *>("windowsSensorHint");
+            QVERIFY(source && gpu && port && hint);
+            QCOMPARE(source->count(), 4);
+            source->setCurrentIndex(source->findData("hwinfo"));
+            QVERIFY(hint->text().contains("12"));
+            QCOMPARE(w.config["windows_sensor_source"].toString(), QString("hwinfo"));
+            QVERIFY(w.sample.sources.value("CpuFreq") != "System API");
+            QVERIFY(port->isHidden());
+            source->setCurrentIndex(source->findData("aida64"));
+            QVERIFY(hint->text().contains("AIDA64"));
+            source->setCurrentIndex(source->findData("librehardwaremonitor"));
+            gpu->setValue(2);
+            port->setValue(18085);
+            QVERIFY(!port->isHidden());
+            QCOMPARE(w.config["windows_gpu_index"].toInt(), 1);
+            QCOMPARE(w.config["lhm_port"].toInt(), 18085);
+        }
+        MainWindow reopened(dir.path());
+        reopened.sampling.stop();
+        QCOMPARE(reopened.findChild<QComboBox *>("windowsSensorSource")->currentData().toString(), QString("librehardwaremonitor"));
+        QCOMPARE(reopened.findChild<QSpinBox *>("windowsGpuIndex")->value(), 2);
+        QCOMPARE(reopened.findChild<QSpinBox *>("lhmPort")->value(), 18085);
+        auto source = reopened.findChild<QComboBox *>("windowsSensorSource");
+        source->setCurrentIndex(source->findData("system"));
+        QVERIFY(!reopened.sample.values.contains("CpuFreq"));
+        QVERIFY(!reopened.sample.values.contains("GpuTemp"));
+    }
+#endif
     void sidebarNavigationSeparatesLibraryAndEditor() {
         TestProfile dir;
         MainWindow w(dir.path());

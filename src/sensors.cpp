@@ -22,7 +22,6 @@
 #include <windows.h>
 #include <iphlpapi.h>
 #include <netioapi.h>
-#include <powrprof.h>
 #include <psapi.h>
 #else
 #include <sys/resource.h>
@@ -41,11 +40,6 @@ void resourceTrace(const char *stage) {
         f.write("\n");
     }
 }
-#ifdef Q_OS_WIN
-struct CpuPowerInfo {
-    ULONG Number, MaxMhz, CurrentMhz, MhzLimit, MaxIdleState, CurrentIdleState;
-};
-#endif
 Snapshot Snapshot::fromJson(const QJsonObject &o) {
     Snapshot s;
     auto v = o["values"].toObject();
@@ -125,6 +119,7 @@ double Snapshot::percentage(const QString &metric) const {
     return qBound(0., v, 100.);
 }
 Collector::Collector(const QString &sysfsRoot, const QString &procRoot) : sysfsRoot(sysfsRoot), procRoot(procRoot) {
+    memoryInfo = currentMemoryInfo(sysfsRoot);
     elapsed.start();
     setAudioEnabled(true);
 }
@@ -136,6 +131,19 @@ void Collector::setWeather(bool enabled, const QString &city) {
 void Collector::setAudioEnabled(bool enabled) {
     if (!enabled) audio.reset();
     else if (!audio) audio = std::make_unique<AudioVolume>();
+}
+void Collector::setWindowsSource(const QString &source, int port, int gpuIndex) {
+#ifdef Q_OS_WIN
+    if (windowsSensorSource(source) == "system") windowsHardware.reset();
+    else {
+        if (!windowsHardware) windowsHardware = std::make_unique<WindowsHardware>();
+        windowsHardware->configure(source, port, gpuIndex);
+    }
+#else
+    Q_UNUSED(source)
+    Q_UNUSED(port)
+    Q_UNUSED(gpuIndex)
+#endif
 }
 #ifndef Q_OS_WIN
 static QByteArray read(const QString &path) {
@@ -317,13 +325,7 @@ Snapshot Collector::collect(const QString &disk) {
         }
         FreeMibTable(table);
     }
-    SYSTEM_INFO info{};
-    GetNativeSystemInfo(&info);
-    QVector<CpuPowerInfo> powers(int(info.dwNumberOfProcessors));
-    if (CallNtPowerInformation(ProcessorInformation, nullptr, 0, powers.data(),
-                               ULONG(powers.size() * sizeof(CpuPowerInfo))) == 0 &&
-        !powers.isEmpty())
-        s.values["CpuFreq"] = powers[0].CurrentMhz;
+    s.unavailable["CpuFreq"] = "Windows system API cannot provide a reliable live CPU clock; select a Windows sensor source in Settings";
     wchar_t name[256];
     DWORD bytes = sizeof(name);
     if (RegGetValueW(HKEY_LOCAL_MACHINE, L"HARDWARE\\DESCRIPTION\\System\\CentralProcessor\\0",
@@ -396,10 +398,19 @@ Snapshot Collector::collect(const QString &disk) {
 #ifdef Q_OS_LINUX
     collectLinuxHardware(s, sysfsRoot, storage.device(), seconds, previousEnergy);
 #endif
+#ifdef Q_OS_WIN
+    if (windowsHardware) windowsHardware->apply(s);
+    else for (const auto &key : {"CpuTemp", "CpuPower", "CpuFan", "CpuPump", "CpuVoltage", "GpuModel", "GpuLoad", "GpuTemp", "GpuFreq", "GpuPower", "GpuFan", "GpuVoltage", "GpuRam", "GpuRamTotal", "GpuRamFree", "GpuRamLoad", "GpuRamUsage", "HDDTemp"})
+        s.unavailable[key] = "Select HWiNFO, AIDA64 or LibreHardwareMonitor in Settings / Windows sensors";
+#endif
     if (s.values.contains("RamValue") && s.values.contains("RamTotal")) {
         s.strings["RamUsage"] = QString::number(s.values["RamValue"] / 1073741824., 'f', 1) + " / " +
                                 QString::number(s.values["RamTotal"] / 1073741824., 'f', 1) + " GB";
     }
+    if (!memoryInfo.specification.isEmpty()) {
+        s.strings["RamSpec"] = memoryInfo.specification;
+        s.sources["RamSpec"] = "SMBIOS / DDR type and Configured Memory Speed";
+    } else s.unavailable["RamSpec"] = memoryInfo.error;
     if (const auto volume = audio ? audio->sample() : std::optional<double>()) {
         s.values["Volume"] = *volume;
         s.sources["Volume"] = "System default audio output";

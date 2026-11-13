@@ -1,6 +1,8 @@
 #pragma once
 #include "audio.h"
 #include "weather.h"
+#include "windowshardware.h"
+#include "memoryinfo.h"
 #include <QElapsedTimer>
 #include <QHash>
 #include <QJsonObject>
@@ -31,11 +33,14 @@ public:
     Snapshot collect(const QString &disk = {});
     void setWeather(bool enabled, const QString &city = {});
     void setAudioEnabled(bool enabled);
+    void setWindowsSource(const QString &source, int port = 8085, int gpuIndex = 0);
 
 private:
     QString sysfsRoot, procRoot;
+    MemoryInfo memoryInfo;
     std::unique_ptr<AudioVolume> audio;
     std::unique_ptr<WeatherClient> weather;
+    std::unique_ptr<WindowsHardware> windowsHardware;
     QHash<QString, double> previousEnergy;
     quint64 previousTotal = 0, previousIdle = 0, previousUp = 0, previousDown = 0;
     QElapsedTimer elapsed;

@@ -127,7 +127,8 @@ gpu = panel("GPU", 246, 80, 138, [
 
 ram = panel("RAM", 12, 226, 82, [
     icon("ram-chip", "memory", 12, 23, "ram", size=15),
-    text("ram-heading", "RAM", 34, 23, 52, 14, "ram", bold=True),
+    text("ram-heading", "RAM", 34, 23, 38, 14, "ram", bold=True),
+    text("ram-spec", "", 78, 23, 132, 11, "muted", metric="RamSpec", align="right"),
     text("ram-usage", "", 12, 57, 198, 22, metric="RamUsage", bold=True),
     layer("ram-usage-bar", "bar", 12, 65, 198, 6, metric="RamLoad", step=1,
           front=rgba("ram"), back=rgba("track"), corner_radius=3),

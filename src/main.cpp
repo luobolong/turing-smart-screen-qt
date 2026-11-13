@@ -45,6 +45,9 @@ int main(int argc, char **argv) {
                        {"packet", "Export a RGB565 device packet from a theme", "file"},
                        {"list-ports", "Enumerate serial ports"},
                        {"dump-sensors", "Print live sensor values and unavailable reasons as JSON"},
+                       {"windows-sensor-source", "Windows hardware source: system, hwinfo, aida64, librehardwaremonitor", "source"},
+                       {"lhm-port", "LibreHardwareMonitor local Web Server port", "port"},
+                       {"gpu-index", "GPU index in the selected monitor, starting at zero", "index"},
                        {"weather-city", "Enable weather for a city (empty uses IP location)", "city"},
                        {"smoke-test", "Native GUI screenshots and resource test", "directory"},
                        {"stress-test", "Theme/editor/resource workload", "directory"},
@@ -57,10 +60,22 @@ int main(int argc, char **argv) {
     try {
         if (parser.isSet("dump-sensors")) {
             Screen::Collector collector;
+            auto dir = parser.value("data-dir");
+            if (dir.isEmpty()) dir = QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation);
+            QFile configFile(dir + "/config.json");
+            QJsonObject config;
+            if (configFile.open(QIODevice::ReadOnly)) config = QJsonDocument::fromJson(configFile.readAll()).object();
+            const auto source = parser.isSet("windows-sensor-source") ? parser.value("windows-sensor-source") : config["windows_sensor_source"].toString("system");
+            if (Screen::windowsSensorSource(source) != source) throw std::runtime_error("Unknown Windows sensor source");
+            bool portOk = true, gpuOk = true;
+            const int port = parser.isSet("lhm-port") ? parser.value("lhm-port").toInt(&portOk) : config["lhm_port"].toInt(8085);
+            const int gpu = parser.isSet("gpu-index") ? parser.value("gpu-index").toInt(&gpuOk) : config["windows_gpu_index"].toInt(0);
+            if (!portOk || port < 1 || port > 65535 || !gpuOk || gpu < 0 || gpu > 31) throw std::runtime_error("Invalid LHM port or GPU index");
+            collector.setWindowsSource(source, port, gpu);
             if (parser.isSet("weather-city"))
                 collector.setWeather(true, parser.value("weather-city"));
             collector.collect();
-            QTimer::singleShot(parser.isSet("weather-city") ? 20000 : 250, &app, [&] {
+            QTimer::singleShot(parser.isSet("weather-city") ? 20000 : source == "librehardwaremonitor" ? 4000 : 250, &app, [&] {
                 QTextStream(stdout) << QJsonDocument(collector.collect().json()).toJson();
                 app.quit();
             });

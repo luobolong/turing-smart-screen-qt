@@ -574,6 +574,7 @@ const QVector<QPair<QString, QString>> &metrics() {
             {"GpuRamUsage", "显存已用 / 总量 (GB)"},
             {"RamValue", "内存已用 (GB)"}, {"RamTotal", "内存总量 (GB)"},
             {"RamUsage", "内存已用 / 总量 (GB)"},
+            {"RamSpec", "内存 DDR 版本 / 速率"},
             {"RamLoad", "内存使用率"},    {"RamValid", "内存可用 (GB)"}, {"RamModel", "内存容量"},
             {"HDDLoad", "分区使用率"},    {"HDDTemp", "硬盘温度"},   {"InternetUp", "上传速率"},
             {"InternetDown", "下载速率"}, {"LocalIp", "本机 IP 地址"}, {"Time", "时间"}, {"Date", "日期"},

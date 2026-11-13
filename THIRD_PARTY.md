@@ -15,4 +15,8 @@
 - Windows 包的 Microsoft Visual C++ 运行库来自本机 MSVC 2022 可再分发运行库目录，适用 Microsoft 原有条款。
 - Linux 包的 Qt、ICU、double-conversion 等运行库保留构建系统中的许可证，位于 `licenses`。
 
-NRBF 读取、主题模型、采集、渲染和串口均为项目中的 C++ 实现。运行时没有 Rust、Python、WebEngine、LibreHardwareMonitor 或外部采集进程。
+NRBF 读取、主题模型、采集、渲染和串口均为项目中的 C++ 实现。运行时没有 Rust、Python 或 WebEngine。Windows 可选读取用户运行的 HWiNFO / AIDA64 / LibreHardwareMonitor，不随程序分发其软件或驱动，也不启动采集助手进程。
+
+- HWiNFO 共享内存布局参考 [HWiNFO Shared Memory Interface](https://www.hwinfo.com/forum/forums/shared-memory-interface.13/)。HWiNFO 由其权利人单独授权；免费版共享内存连续运行限制见[官方说明](https://www.hwinfo.com/licenses/)。
+- AIDA64 共享内存参考其[公开接口说明](https://www.aida64.com/user-manual/hardware-monitoring/external-applications?language_content_entity=en)。AIDA64 由 FinalWire 单独授权。
+- LibreHardwareMonitor 本机 Web 接口参考其 [HttpServer 实现](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor/blob/master/LibreHardwareMonitor.Windows.Forms/Utilities/HttpServer.cs)。仅实现 JSON 接口客户端，未复制或捆绑其库；原项目使用 MPL-2.0。

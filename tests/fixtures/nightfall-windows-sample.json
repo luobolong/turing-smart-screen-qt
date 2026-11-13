@@ -23,6 +23,7 @@
     "CpuModel": "AMD Ryzen 7 9800X3D 8-Core Processor",
     "GpuModel": "AMD Radeon RX 7900 XT",
     "RamUsage": "19.3 / 60.4 GB",
+    "RamSpec": "DDR4/3200MHz",
     "Date": "2026/10/25",
     "Weekday": "星期日",
     "TimeSeconds": "21:48:16",
