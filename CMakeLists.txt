@@ -42,7 +42,7 @@ if(BUILD_TESTING)
     set_tests_properties(core PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
     qt_add_executable(gui-tests tests/gui_test.cpp ${SCREEN_UI_SOURCES})
     target_link_libraries(gui-tests PRIVATE screen_core Qt6::Widgets Qt6::Svg Qt6::Test)
-    add_test(NAME gui COMMAND gui-tests -o "${CMAKE_CURRENT_BINARY_DIR}/gui-test.txt,txt")
+    add_test(NAME gui COMMAND gui-tests -o -,txt -o "${CMAKE_CURRENT_BINARY_DIR}/gui-test.txt,txt")
     set_tests_properties(gui PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
     if(WIN32)
         add_test(NAME gui-native COMMAND gui-tests
@@ -51,7 +51,7 @@ if(BUILD_TESTING)
             libraryToolbarSearchAndTreeActions collapsiblePanesRestoreAcrossOrientationsAndWindowRebuild
             overviewHasAFileAndFolderOpenKeepsThumbnails
             trayMenuKeepsSystemStyleAcrossPalettes traySerialMenuListsPortsAndMarksOnlyConnectedPort
-            -o "${CMAKE_CURRENT_BINARY_DIR}/gui-native-test.txt,txt")
+            -o -,txt -o "${CMAKE_CURRENT_BINARY_DIR}/gui-native-test.txt,txt")
         set_tests_properties(gui-native PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=windows:fontengine=gdi")
     endif()
     qt_add_executable(startup-tests tests/startup_test.cpp)

@@ -54,7 +54,7 @@ jobs:
         uses: jurplel/install-qt-action@a9c63c7c123f3069cff414e7e482d95dfa9d8125 # v4.4.1
         with:
           version: '6.8.3'
-          modules: 'qtsvg'
+          # Qt SVG is included in the desktop package, not an aqt add-on module.
           arch: ${{ matrix.qt-arch }}
           cache: true
 
@@ -337,6 +337,7 @@ jobs:
           path: |
             build/ci/test-results.xml
             build/ci/Testing/Temporary/*.log
+            build/ci/gui*-test.txt
             build/ci/nightfall.png
           if-no-files-found: ignore
           retention-days: 7

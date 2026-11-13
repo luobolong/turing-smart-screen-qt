@@ -1135,7 +1135,7 @@ private slots:
         w.addComponent("CPU");
         const auto before = w.theme.data, config = w.config;
         const auto count = w.entries.size();
-        QVERIFY(QDir(dir.path() + "/themes/deleted").rmdir("."));
+        QVERIFY(QDir().rmdir(dir.path() + "/themes/deleted"));
         QFile blocked(dir.path() + "/themes/deleted");
         QVERIFY(blocked.open(QIODevice::WriteOnly));
         blocked.write("not a directory");

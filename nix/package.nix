@@ -5,6 +5,7 @@
   ninja,
   pkg-config,
   qt6,
+  fontconfig,
   libpulseaudio,
   copyDesktopItems,
   makeDesktopItem,
@@ -54,7 +55,14 @@ stdenv.mkDerivation {
   doCheck = true;
   preCheck = ''
     export QT_QPA_PLATFORM=offscreen
-    export TURING_QT_ASSETS="$src/assets"
+    # Tests edit copies of bundled themes; use the writable unpacked source.
+    export TURING_QT_ASSETS="$PWD/../assets"
+    export XDG_CONFIG_HOME="$TMPDIR/test-config"
+    export XDG_CACHE_HOME="$TMPDIR/test-cache"
+    export XDG_RUNTIME_DIR="$TMPDIR/test-runtime"
+    mkdir -p "$XDG_CONFIG_HOME" "$XDG_CACHE_HOME"
+    mkdir -m 700 "$XDG_RUNTIME_DIR"
+    export FONTCONFIG_FILE="${fontconfig.out}/etc/fonts/fonts.conf"
   '';
 
   desktopItems = [
