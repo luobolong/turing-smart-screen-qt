@@ -232,6 +232,57 @@ private slots:
         }
         window.dirty = false; window.quitting = true;
     }
+    void zoomPercentagesRemainVisibleAcrossPalettesAndFontSizes() {
+        TestProfile dir;
+        MainWindow window(dir.path());
+        window.show();
+        window.sampling.stop();
+        for (const auto &palette : {QString("catppuccin-latte"), QString("catppuccin-macchiato")}) {
+            window.selectUiTheme(palette);
+            for (int size : {9, 12}) {
+                for (const auto &prefix : {QString("preview"), QString("editor")}) {
+                    window.setPage(prefix == "preview" ? MainWindow::LibraryPage : MainWindow::EditorPage);
+                    auto value = window.findChild<QDoubleSpinBox *>(prefix + "ZoomValue");
+                    QVERIFY(value && value->isVisible());
+                    const auto edit = value->findChild<QLineEdit *>();
+                    QVERIFY(edit);
+                    auto font = value->font(); font.setPointSize(size); value->setFont(font);
+                    auto controls = window.findChild<QWidget *>(prefix + "ZoomControls");
+                    const auto capture = [&] {
+                        const auto frame = controls->grab();
+                        const auto scale = frame.devicePixelRatioF();
+                        return frame.toImage().copy(QRect(value->pos() * scale, value->size() * scale));
+                    };
+                    value->clearFocus();
+                    value->setValue(100.);
+                    edit->deselect();
+                    QCoreApplication::processEvents();
+                    const auto first = capture();
+                    value->setValue(200.);
+                    edit->deselect();
+                    QCoreApplication::processEvents();
+                    const auto second = capture();
+                    const auto shots = qEnvironmentVariable("TURING_ZOOM_UI_SHOTS");
+                    if (!shots.isEmpty()) {
+                        QDir().mkpath(shots);
+                        QVERIFY(controls->grab().save(
+                            shots + '/' + palette + '-' + QString::number(size) + '-' + prefix + ".png"));
+                    }
+                    QVERIFY2(edit->width() >= edit->fontMetrics().horizontalAdvance(value->text()),
+                        qPrintable(palette + '/' + prefix + ": the percentage editor must fit its text"));
+                    QVERIFY2(first != second, qPrintable(palette + '/' + prefix + " font=" + QString::number(size)
+                        + ": changing the percentage must change the painted text"));
+                    value->selectAll();
+                    QTest::keyClicks(value, "175.50");
+                    QTest::keyClick(value, Qt::Key_Return);
+                    QCOMPARE(value->value(), 175.5);
+                    const auto target = prefix == "preview" ? window.previewCanvas : window.canvas;
+                    QVERIFY(std::abs(target->zoom() - 1.755) < .00001);
+                }
+            }
+        }
+        window.quitting = true;
+    }
     void collectionToggleSyncsPersistsAndReleasesLightweightCaches() {
         TestProfile dir;
         {

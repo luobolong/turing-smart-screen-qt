@@ -63,6 +63,11 @@ QSpinBox::down-button, QDoubleSpinBox::down-button {
     subcontrol-origin: border; subcontrol-position: bottom right; width: 20px;
     background: transparent; border: none; border-left: 1px solid @border@;
 }
+QDoubleSpinBox[zoomInput="true"]::up-button, QDoubleSpinBox[zoomInput="true"]::down-button {
+    /* Qt 6.12 collapses the editor for right-aligned buttons even with NoButtons. */
+    subcontrol-position: center;
+    width: 0; height: 0; border: none;
+}
 QSpinBox::up-button:hover, QSpinBox::down-button:hover,
 QDoubleSpinBox::up-button:hover, QDoubleSpinBox::down-button:hover { background: @button@; }
 QSpinBox::up-arrow, QDoubleSpinBox::up-arrow {

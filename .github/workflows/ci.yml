@@ -283,12 +283,22 @@ jobs:
           if ($versionProcess.ExitCode -ne 0) {
               throw 'Packaged application failed to start'
           }
+          $renderTheme = (Resolve-Path -LiteralPath "$stage\assets\themes\custom\nightfall.json").Path
+          $renderSnapshot = (Resolve-Path -LiteralPath `
+              (Join-Path $env:GITHUB_WORKSPACE 'tests\fixtures\nightfall-sample.json')).Path
+          $renderOutput = Join-Path $env:GITHUB_WORKSPACE 'build\ci\nightfall-package.png'
+          $renderStdout = Join-Path $env:GITHUB_WORKSPACE 'build\ci\package-render-stdout.log'
+          $renderStderr = Join-Path $env:GITHUB_WORKSPACE 'build\ci\package-render-stderr.log'
+          Remove-Item -LiteralPath $renderOutput -Force -ErrorAction SilentlyContinue
+          $renderArguments = "--render-theme `"$renderTheme`" --snapshot `"$renderSnapshot`" --output `"$renderOutput`""
           $renderProcess = Start-Process -FilePath "$stage\turing-screen-qt.exe" `
-              -ArgumentList @('--render-theme', 'assets\themes\nightfall.json',
-                  '--snapshot', 'tests\fixtures\nightfall-sample.json',
-                  '--output', 'build\ci\nightfall-package.png') -Wait -PassThru
-          if ($renderProcess.ExitCode -ne 0 -or -not (Test-Path -LiteralPath 'build\ci\nightfall-package.png')) {
-              throw 'Packaged theme render failed'
+              -WorkingDirectory $stage -ArgumentList $renderArguments `
+              -RedirectStandardOutput $renderStdout -RedirectStandardError $renderStderr -Wait -PassThru
+          Get-Content -LiteralPath $renderStdout
+          Get-Content -LiteralPath $renderStderr
+          if ($renderProcess.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $renderOutput -PathType Leaf) -or
+              (Get-Item -LiteralPath $renderOutput).Length -eq 0) {
+              throw "Packaged theme render failed (exit code $($renderProcess.ExitCode), output: $renderOutput)"
           }
 
           $makensis = (Get-Command 'makensis.exe' -ErrorAction SilentlyContinue).Source
@@ -338,6 +348,8 @@ jobs:
             build/ci/test-results.xml
             build/ci/Testing/Temporary/*.log
             build/ci/gui*-test.txt
+            build/ci/package-*.log
             build/ci/nightfall.png
+            build/ci/nightfall-package.png
           if-no-files-found: ignore
           retention-days: 7
