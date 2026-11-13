@@ -210,7 +210,7 @@ jobs:
           New-Item -ItemType Directory -Path $stage, "$stage\licenses" -Force | Out-Null
           Copy-Item -LiteralPath 'build\ci\turing-screen-qt.exe' -Destination $stage
           Copy-Item -LiteralPath assets, docs -Destination $stage -Recurse
-          Copy-Item -LiteralPath README.md, LICENSE, THIRD_PARTY.md -Destination $stage
+          Copy-Item -LiteralPath README.md, README.zh-CN.md, LICENSE, THIRD_PARTY.md, THIRD_PARTY.zh-CN.md -Destination $stage
           Copy-Item -LiteralPath LICENSE -Destination "$stage\licenses\Qt-GPL-3.0.txt"
 
           & "$qtRoot\bin\windeployqt.exe" --release --no-compiler-runtime --no-translations `

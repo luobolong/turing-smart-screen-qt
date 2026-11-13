@@ -6,7 +6,7 @@ test ! -e "$output" || test "${1:-}" = --refresh || { echo 'Release directory al
 mkdir -p "$output/lib" "$output/plugins/platforms" "$output/plugins/imageformats" "$output/licenses"
 cp build/linux/turing-screen-qt "$output/"
 cp -au assets docs "$output/"
-cp README.md LICENSE THIRD_PARTY.md "$output/"
+cp README.md README.zh-CN.md LICENSE THIRD_PARTY.md THIRD_PARTY.zh-CN.md "$output/"
 cp LICENSE "$output/licenses/Qt-GPL-3.0.txt"
 for library in Qt6Core Qt6Gui Qt6Widgets Qt6Network Qt6Svg Qt6DBus Qt6XcbQpa Qt6WaylandClient; do
     test ! -f "/usr/lib/lib$library.so.6" || cp -Lu "/usr/lib/lib$library.so.6" "$output/lib/"

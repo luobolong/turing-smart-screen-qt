@@ -11,7 +11,7 @@ try {
     New-Item -ItemType Directory -Path $taskDestination,"$taskDestination/licenses" -Force | Out-Null
     Copy-Item -LiteralPath 'build/windows/Release/turing-screen-qt.exe' -Destination $taskDestination
     Copy-Item -LiteralPath assets,docs -Destination $taskDestination -Recurse
-    Copy-Item -LiteralPath README.md,LICENSE,THIRD_PARTY.md -Destination $taskDestination
+    Copy-Item -LiteralPath README.md,README.zh-CN.md,LICENSE,THIRD_PARTY.md,THIRD_PARTY.zh-CN.md -Destination $taskDestination
     Copy-Item -LiteralPath LICENSE -Destination "$taskDestination/licenses/Qt-GPL-3.0.txt"
     $env:PATH="$QtRoot/bin;$env:PATH"
     & "$QtRoot/bin/windeployqt.exe" --release --no-translations --no-opengl-sw --no-system-d3d-compiler --no-system-dxc-compiler --no-quick-import --no-compiler-runtime --no-plugins "$taskDestination/turing-screen-qt.exe"

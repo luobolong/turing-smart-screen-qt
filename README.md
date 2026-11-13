@@ -1,72 +1,74 @@
 # Turing Screen
 
-一款轻量的 USB 副屏工具，支持 Windows 和 Linux，可预览、编辑主题并显示电脑状态。
+English | [简体中文](README.zh-CN.md)
 
-适用于 **35inchNEW / Rev A，320×480 或 480×320** 的设备，其他型号不保证兼容。
+A lightweight USB secondary display app for Windows and Linux. Preview and edit themes, and display your PC's system stats.
 
-## 开始使用
+Designed for **35inchNEW / Rev A devices at 320×480 or 480×320**. Compatibility with other models is not guaranteed.
 
-- **Windows**：运行安装包，或完整解压便携包后打开 `turing-screen-qt.exe`。
-- **Linux**：解压发布包后运行 `./run.sh`。如果无法连接设备，请检查当前用户是否有串口访问权限。
-- **Nix / NixOS**：在源码目录运行 `nix run path:.`。
+## Getting started
 
-便携包中的 `assets`、运行库和插件需要与程序一起保留。
+- **Windows**: Run the installer, or fully extract the portable archive and launch `turing-screen-qt.exe`.
+- **Linux**: Extract the release archive and run `./run.sh`. If the device does not connect, check that your user has permission to access the serial port.
+- **Nix / NixOS**: Run `nix run path:.` from the source directory.
 
-1. 在“主题预览”中选择主题。
-2. 插入 USB 副屏，在右侧选择串口并点击“连接设备”。
-3. 点击“应用到副屏”开始显示。方向、亮度和镜像也在右侧调整。
+Keep the portable package's `assets`, runtime libraries, and plugins alongside the application.
 
-未连接副屏时，也可以预览和编辑主题。
+1. Choose a theme in **Theme preview**.
+2. Plug in the USB display, select its serial port in the panel on the right, and click **Connect device**.
+3. Click **Send to display** to start displaying the theme. Orientation, brightness, and mirroring are also available in the right panel.
 
-## 常用功能
+You can preview and edit themes without a connected display.
 
-- **主题**：支持官方 `.data` 和 JSON 主题。双击主题进入编辑器，可调整文字、图片、图层、进度条和指标绑定，支持撤销、重做和导出 PNG。官方主题修改后保存为 JSON。
-- **缩放**：预览和编辑器右下角提供适应窗口、1:1、滑动条和百分比输入，也可用 Ctrl + 滚轮缩放。
-- **采集数据**：默认每秒更新，可在设置中调整间隔。关闭“采集数据”会暂停更新并保留最后一帧；设置、设备面板和托盘菜单中的开关同步。
-- **轻量模式**：释放编辑界面和静态绘图缓存，继续更新已连接的副屏。点击托盘图标恢复窗口；托盘菜单中的“退出”结束程序。
-- **天气**：在设置中启用并填写城市，留空按 IP 定位。自动每 10 分钟更新，也可点击“立即获取天气信息”；按钮旁显示结果或错误。天气需要联网并开启数据采集。
-- **外观与启动**：设置中可切换中文 / English、界面配色、关闭到托盘及登录自启动。自启动会进入轻量模式，连接上次使用的串口并开始发送。
+## Features
 
-## 传感器
+- **Themes**: Supports official `.data` themes and JSON themes. Double-click a theme to open the editor, where you can adjust text, images, layers, progress bars, and metric bindings. Undo, redo, and PNG export are supported. Edited official themes are saved as JSON.
+- **Zoom**: The preview and editor provide fit-to-window, 1:1, a slider, and percentage input in the bottom-right corner. You can also zoom with Ctrl + mouse wheel.
+- **Data collection**: Updates once per second by default; the interval is configurable in Settings. Turning off **Collect data** pauses updates and keeps the last frame. The switches in Settings, the device panel, and the tray menu stay in sync.
+- **Lightweight mode**: Releases the editor interface and static drawing caches while continuing to update the connected display. Click the tray icon to restore the window, or choose **Exit** from the tray menu to exit.
+- **Weather**: Enable weather in Settings and enter a city, or leave it blank to use IP-based location. Weather refreshes automatically every 10 minutes. You can also click **Fetch weather now**; the result or error appears next to the button. Weather requires an internet connection and data collection to be enabled.
+- **Appearance and startup**: Settings lets you switch between Chinese and English, choose a color scheme, close to the tray, and enable startup at sign-in. At sign-in, the app enters lightweight mode, connects to the last-used serial port, and starts sending frames.
 
-默认可显示 CPU 使用率、内存、网速、磁盘空间、音量和时间。无法获取的指标显示 `--`，可在“传感器”页查看原因。
+## Sensors
 
-Windows 的温度、实时 CPU 频率和 GPU 数据需要第三方监控软件。在“设置 → Windows 传感器”中选择对应来源：
+CPU usage, memory, network speed, disk space, volume, and time are available by default. Unavailable metrics show `--`; the **Sensors** page explains why.
 
-| 来源 | 配置方法 |
+On Windows, temperatures, live CPU frequency, and GPU data require third-party monitoring software. Choose a source under **Settings → Windows sensors**:
+
+| Source | Setup |
 | --- | --- |
-| HWiNFO | 运行 Sensors，开启 `Shared Memory Support`。 |
-| AIDA64 | 在“硬件监控 → 外部程序”中启用共享内存，并勾选所需指标。 |
-| LibreHardwareMonitor | 开启 `Options → Remote Web Server → Run`，端口与本程序一致，默认 `8085`；关闭 Web Server 身份验证。 |
+| HWiNFO | Open Sensors and enable `Shared Memory Support`. |
+| AIDA64 | Enable shared memory under **Hardware Monitoring → External Applications** and select the metrics you need. |
+| LibreHardwareMonitor | Enable `Options → Remote Web Server → Run`. Use the same port in both applications (default: `8085`) and disable Web Server authentication. |
 
-第三方软件需单独安装并保持运行，能否读取具体指标取决于硬件、驱动和所选来源。
+Install the monitoring software separately and keep it running. Available metrics depend on your hardware, drivers, and selected source.
 
-Linux 直接读取系统驱动提供的 CPU、磁盘和 AMD GPU 指标；NVIDIA / Intel GPU 采集暂未实现。音量采集需要 PulseAudio 或 PipeWire-Pulse。
+On Linux, the app reads CPU, disk, and AMD GPU metrics directly from system drivers. NVIDIA and Intel GPU collection is not yet implemented. Volume collection requires PulseAudio or PipeWire-Pulse.
 
-## 文件与备份
+## Files and backups
 
-便携版主题通常保存在 `assets/themes`：`official` 为官方主题，`custom` 为个人主题，`deleted` 为回收站。目录不可写时，程序会使用用户数据目录。
+Portable installations usually store themes in `assets/themes`: `official` contains official themes, `custom` contains your own themes, and `deleted` is the trash folder. If that directory is not writable, the app uses the user data directory instead.
 
-更换便携包时，请保留自己的主题文件。设置中的“打开数据目录”可找到 `config.json`；备份设置时保存此文件。
+Keep your personal theme files when replacing a portable package. Use **Open data folder** in Settings to locate `config.json`, and back up that file to preserve your settings.
 
-## 从源码编译
+## Building from source
 
-需要 CMake ≥ 3.21、C++17 编译器，以及 Qt ≥ 6.4 的 Core、Gui、Widgets、Network、Svg 和 Test 模块。Linux 另需 Ninja、pkg-config 和 libpulse 开发文件。
+Requires CMake ≥ 3.21, a C++17 compiler, and Qt ≥ 6.4 with the Core, Gui, Widgets, Network, Svg, and Test modules. Linux also requires Ninja, pkg-config, and the libpulse development files.
 
-Windows 使用 Visual Studio 2022 / MSVC：
+Windows with Visual Studio 2022 / MSVC:
 
 ```powershell
 ./scripts/build-windows.ps1 -QtRoot C:/Qt/6.8.0/msvc2022_64
 ```
 
-Linux：
+Linux:
 
 ```sh
 ./scripts/build-linux.sh
 ```
 
-构建脚本会同时运行测试。Nix 用户也可运行 `nix build path:.`。打包脚本位于 `scripts`，命令行参数可用 `--help` 查看。
+The build scripts also run the tests. Nix users can run `nix build path:.`. Packaging scripts are in `scripts`; use the application's `--help` option to view its command-line options.
 
-GitHub Actions 的 `Build, test and package` 工作流会在 push 或手动运行时生成 Windows x64 便携包和安装包。打开工作流运行页面，在 **Artifacts** 中下载 `turing-screen-qt-<版本号>-windows-x64-portable.zip`，完整解压后运行 `turing-screen-qt.exe`。便携包包含 Qt、MSVC 运行库、插件和资源文件，产物保留 30 天；Pull Request 只执行构建与测试。
+The **Build, test and package** GitHub Actions workflow generates Windows x64 portable archives and installers on pushes and manual runs. Open a workflow run and download `turing-screen-qt-<version>-windows-x64-portable.zip` from **Artifacts**. Extract the entire archive, then run `turing-screen-qt.exe`. The portable package includes Qt, the MSVC runtime, plugins, and assets. Artifacts are retained for 30 days; pull requests only run builds and tests.
 
-串口报文见 [协议说明](docs/protocol.md)。源码采用 [GPL-3.0-or-later](LICENSE)，字体、主题等第三方资源说明见 [THIRD_PARTY.md](THIRD_PARTY.md)。
+See the [protocol reference](docs/protocol.md) for serial messages. The source code is licensed under [GPL-3.0-or-later](LICENSE). See [third-party materials](THIRD_PARTY.md) for fonts, themes, and other bundled resources.

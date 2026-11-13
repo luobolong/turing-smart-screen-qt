@@ -1,161 +1,163 @@
-# 35inchNEW / Rev A 串口协议
+# 35inchNEW / Rev A serial protocol
 
-适用尺寸：竖屏 320×480、横屏 480×320。不同硬件或固件版本可能存在差异。下文的字节示例均为十六进制，字节偏移从 0 开始。
+English | [简体中文](protocol.zh-CN.md)
 
-## 串口与报文
+Supported dimensions: 320×480 in portrait orientation and 480×320 in landscape orientation. Hardware and firmware revisions may differ. Byte examples below are hexadecimal, and byte offsets start at 0.
 
-- 波特率：115200；数据格式：8N1。
-- DTR、RTS 置位；关闭硬件及软件流控。
-- 报文由 **6 字节命令头 + 可选负载** 组成，长度由命令决定。
-- 命令头没有固定起始标志、长度字段、序号或 CRC；普通位图传输不等待逐帧 ACK。
-- 同一报文的命令头和负载必须连续发送，不能插入其他命令。USB 底层分包不是应用层报文边界。
+## Serial connection and messages
 
-## 命令头
+- Baud rate: 115200; data format: 8N1.
+- Assert DTR and RTS; disable hardware and software flow control.
+- Each message consists of a **6-byte command header + optional payload**. Its length depends on the command.
+- The header has no fixed start marker, length field, sequence number, or CRC. Normal bitmap transfers do not wait for a per-frame ACK.
+- Send each message's header and payload consecutively, without inserting other commands. USB packet boundaries are not application-level message boundaries.
 
-前 5 字节依次打包四个 10 位字段，最后 1 字节为命令：
+## Command header
+
+The first 5 bytes pack four 10-bit fields in order. The last byte is the command:
 
 ```text
 packed = (x << 30) | (y << 20) | (end_x << 10) | end_y
-B0..B4 = packed 的 5 字节大端表示
+B0..B4 = packed as 5 bytes in big-endian order
 B5     = command
 ```
 
-| 字节 | 内容 |
+| Byte | Contents |
 | --- | --- |
 | B0 | x[9:2] |
-| B1 | 高 2 位为 x[1:0]，低 6 位为 y[9:4] |
-| B2 | 高 4 位为 y[3:0]，低 4 位为 end_x[9:6] |
-| B3 | 高 6 位为 end_x[5:0]，低 2 位为 end_y[9:8] |
+| B1 | Upper 2 bits: x[1:0]; lower 6 bits: y[9:4] |
+| B2 | Upper 4 bits: y[3:0]; lower 4 bits: end_x[9:6] |
+| B3 | Upper 6 bits: end_x[5:0]; lower 2 bits: end_y[9:8] |
 | B4 | end_y[7:0] |
-| B5 | 命令 |
+| B5 | Command |
 
-字段编码范围为 0–1023；绘图坐标还必须在当前屏幕范围内。控制命令可能复用坐标字段传递参数。
+Each field can encode values from 0 to 1023. Drawing coordinates must also be within the current screen dimensions. Control commands may reuse the coordinate fields for parameters.
 
-## 控制命令
+## Control commands
 
-| 命令 | 总长度 | 含义与参数 |
+| Command | Total length | Meaning and parameters |
 | --- | --- | --- |
-| `0x65` | 6 字节 | 复位，四个字段均为 0。 |
-| `0x66` | 6 字节 | 清屏，四个字段均为 0；兼容处理是先设为方向 0，清屏后恢复方向。 |
-| `0x67` | 6 字节 | 填黑，四个字段均为 0。 |
-| `0x6C` | 6 字节 | 关闭屏幕，四个字段均为 0。 |
-| `0x6D` | 6 字节 | 打开屏幕，四个字段均为 0。 |
-| `0x6E` | 6 字节 | 设置亮度，原始亮度值放在 x，其他字段为 0。 |
-| `0x79` | 16 字节 | 设置方向和尺寸，格式见下文。 |
-| `0x7A` | 16 字节 | 设置镜像，格式见下文。 |
-| `0xFF` | 6 字节 | 连接探测：`00 00 00 00 00 FF`。 |
+| `0x65` | 6 bytes | Reset; all four fields are 0. |
+| `0x66` | 6 bytes | Clear the screen; all four fields are 0. For compatibility, set orientation to 0 before clearing, then restore the previous orientation. |
+| `0x67` | 6 bytes | Fill with black; all four fields are 0. |
+| `0x6C` | 6 bytes | Turn the screen off; all four fields are 0. |
+| `0x6D` | 6 bytes | Turn the screen on; all four fields are 0. |
+| `0x6E` | 6 bytes | Set brightness; put the raw brightness value in x and set the other fields to 0. |
+| `0x79` | 16 bytes | Set orientation and dimensions; see below. |
+| `0x7A` | 16 bytes | Set mirroring; see below. |
+| `0xFF` | 6 bytes | Connection probe: `00 00 00 00 00 FF`. |
 
-### 亮度
+### Brightness
 
-原始值 `0` 最亮、`255` 最暗。百分比 `p`（0–100）可按以下公式转换：
+A raw value of `0` is brightest; `255` is darkest. Convert a percentage `p` (0–100) as follows:
 
 ```text
 raw = floor(255 × (100 - p) / 100)
 ```
 
-最亮：`00 00 00 00 00 6E`；最暗：`3F C0 00 00 00 6E`。亮度经过 x 字段打包，不能直接写入第一个字节。
+Brightest: `00 00 00 00 00 6E`; darkest: `3F C0 00 00 00 6E`. Brightness is packed into the x field, so it cannot be written directly into the first byte.
 
-### 方向
+### Orientation
 
-| 偏移 | 内容 |
+| Offset | Contents |
 | --- | --- |
-| 0–4 | 全部为 0 |
+| 0–4 | All zeros |
 | 5 | `79` |
-| 6 | 十进制 `100 + direction` |
-| 7–8 | 宽度，16 位大端 |
-| 9–10 | 高度，16 位大端 |
-| 11–15 | 全部为 0 |
+| 6 | Decimal `100 + direction` |
+| 7–8 | Width, 16-bit big-endian |
+| 9–10 | Height, 16-bit big-endian |
+| 11–15 | All zeros |
 
-| direction | 方向 | 宽 × 高 | B6 |
+| direction | Orientation | Width × height | B6 |
 | --- | --- | --- | --- |
-| 0 | 竖屏 | 320×480 | `64` |
-| 1 | 反向竖屏 | 320×480 | `65` |
-| 2 | 横屏 | 480×320 | `66` |
-| 3 | 反向横屏 | 480×320 | `67` |
+| 0 | Portrait | 320×480 | `64` |
+| 1 | Reverse portrait | 320×480 | `65` |
+| 2 | Landscape | 480×320 | `66` |
+| 3 | Reverse landscape | 480×320 | `67` |
 
-横屏示例：
+Landscape example:
 
 ```text
 00 00 00 00 00 79 66 01 E0 01 40 00 00 00 00 00
 ```
 
-### 镜像
+### Mirroring
 
-前 5 字节为 0，B5 为 `7A`，B6 为 `00`（关闭）或 `01`（开启），B7–B15 补零。开启镜像示例：
+The first 5 bytes are 0, B5 is `7A`, B6 is `00` (off) or `01` (on), and B7–B15 are zero-filled. Example with mirroring enabled:
 
 ```text
 00 00 00 00 00 7A 01 00 00 00 00 00 00 00 00 00
 ```
 
-## RGB 位图：0xC5
+## RGB bitmap: 0xC5
 
-命令头指定包含右下角端点的矩形，随后发送紧密排列的 RGB565 像素：
+The header specifies a rectangle with an inclusive bottom-right endpoint, followed by tightly packed RGB565 pixels:
 
 ```text
-命令头：header(x, y, x + width - 1, y + height - 1, 0xC5)
-负载长度：width × height × 2 字节
-像素顺序：从上到下逐行，每行从左到右
+Header: header(x, y, x + width - 1, y + height - 1, 0xC5)
+Payload length: width × height × 2 bytes
+Pixel order: rows from top to bottom, each row from left to right
 ```
 
-每个像素按 **小端** 发送，不含图片文件头、透明度或行尾填充。8 位 RGB 转换为 RGB565：
+Send each pixel in **little-endian** order, without an image file header, alpha channel, or row padding. Convert 8-bit RGB channels to RGB565 as follows:
 
 ```text
 rgb565 = ((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3)
-发送顺序：rgb565 & 0xFF，然后 rgb565 >> 8
+Send order: rgb565 & 0xFF, then rgb565 >> 8
 ```
 
-| 颜色 | RGB565 | 发送字节 |
+| Color | RGB565 | Bytes sent |
 | --- | --- | --- |
-| 红 | `F800` | `00 F8` |
-| 绿 | `07E0` | `E0 07` |
-| 蓝 | `001F` | `1F 00` |
-| 白 | `FFFF` | `FF FF` |
-| 黑 | `0000` | `00 00` |
+| Red | `F800` | `00 F8` |
+| Green | `07E0` | `E0 07` |
+| Blue | `001F` | `1F 00` |
+| White | `FFFF` | `FF FF` |
+| Black | `0000` | `00 00` |
 
-全屏绘制的负载均为 307200 字节：
+A full-screen update has a 307200-byte payload in either orientation:
 
-| 尺寸 | 左上角 → 右下角 | 命令头 |
+| Dimensions | Top-left → bottom-right | Header |
 | --- | --- | --- |
 | 320×480 | (0, 0) → (319, 479) | `00 00 04 FD DF C5` |
 | 480×320 | (0, 0) → (479, 319) | `00 00 07 7D 3F C5` |
 
-在 (10, 20) 绘制横向两个红像素的完整报文：
+Complete message for drawing two red pixels horizontally, starting at (10, 20):
 
 ```text
 02 81 40 2C 14 C5 00 F8 00 F8
 ```
 
-局部更新也使用 `0xC5`，只改变矩形坐标及对应负载长度。
+Partial updates also use `0xC5`; only the rectangle coordinates and corresponding payload length change.
 
-## 发送时序
+## Transmission timing
 
-连接后可依次发送探测、方向、镜像和亮度命令。方向、镜像命令之后各等待 10 ms。
+After connecting, you can send the probe, orientation, mirroring, and brightness commands in that order. Wait 10 ms after each orientation or mirroring command.
 
-- **V1**：位图命令头发送后等待 10 ms，再发送像素；像素发送完后再等待 10 ms。
-- **V2**：省略上述位图传输的两次等待，方向和镜像的等待仍保留。
+- **V1**: Wait 10 ms after sending the bitmap header before sending the pixels. Wait another 10 ms after the pixels have been sent.
+- **V2**: Omit both bitmap-transfer waits described above. Keep the waits after orientation and mirroring commands.
 
-探测回复中若包含 ASCII `V2`，可采用 V2 时序；无法确认版本时使用 V1 时序。
+Use V2 timing if the probe response contains ASCII `V2`. If the version cannot be determined, use V1 timing.
 
-## 扩展命令
+## Extended commands
 
-以下仅描述已知报文布局，不能假定所有 Rev A 固件都支持。
+The following sections describe known message layouts only. Do not assume that all Rev A firmware supports them.
 
-### 同色点列表：0xC3
+### Single-color point list: 0xC3
 
-报文固定为 64 字节：
+The message is always 64 bytes long:
 
 ```text
 B0..B5 = header(base_x, base_y, coord_byte_count, 0, 0xC3)
-B6..B7 = RGB565 颜色，高字节在前
+B6..B7 = RGB565 color, high byte first
 B8..   = dx0, dy0, dx1, dy1, ...
 ```
 
-`coord_byte_count` 是有效坐标数据的字节数，必须为偶数，最多 56 字节，即 28 个点。每个坐标分量占 1 字节；尾部剩余字节不属于有效坐标。
+`coord_byte_count` is the number of valid coordinate bytes. It must be even and at most 56 bytes, representing up to 28 points. Each coordinate component occupies 1 byte; any remaining trailing bytes are not valid coordinates.
 
-该命令的颜色为 **大端**，与 `0xC5` 相反。坐标按相对基准点解释，但固件的实际绘点行为仍需确认。
+This command uses **big-endian** color, unlike `0xC5`. Coordinates are interpreted relative to the base point, but the firmware's actual point-drawing behavior still needs verification.
 
-### 单色位图：0xC6
+### Monochrome bitmap: 0xC6
 
-矩形头格式与 `0xC5` 相同，命令改为 `0xC6`。像素按顺序压缩为 1 bit，每字节先高位、后低位。
+The rectangle header has the same format as `0xC5`, with the command changed to `0xC6`. Pixels are packed sequentially at 1 bit per pixel, most significant bit first within each byte.
 
-已知尺寸包括 68×90（765 字节）和 48×66（396 字节）。报文不携带颜色，位值对应的颜色和背景处理由固件决定，尚未确认；不能将 RGB565 数据作为此命令的负载。
+Known dimensions include 68×90 (765 bytes) and 48×66 (396 bytes). The message carries no color. The firmware determines which colors the bit values represent and how the background is handled; this behavior has not been confirmed. Do not use RGB565 data as the payload for this command.

@@ -5,7 +5,8 @@ import zipfile
 root = Path(__file__).resolve().parents[1]
 output = root / "dist/turing-screen-qt-0.2.1-source.zip"
 output.parent.mkdir(exist_ok=True)
-entries = [root / name for name in ["CMakeLists.txt", "README.md", "LICENSE", "THIRD_PARTY.md",
+entries = [root / name for name in ["CMakeLists.txt", "README.md", "README.zh-CN.md", "LICENSE",
+                                     "THIRD_PARTY.md", "THIRD_PARTY.zh-CN.md",
                                      ".clang-format", ".gitignore"]]
 for directory in ["src", "tests", "scripts", "assets", "docs"]:
     entries.extend(sorted(p for p in (root / directory).rglob("*")
