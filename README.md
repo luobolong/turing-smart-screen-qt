@@ -6,6 +6,16 @@ A lightweight USB secondary display app for Windows and Linux. Preview and edit 
 
 Designed for **35inchNEW / Rev A devices at 320×480 or 480×320**. Compatibility with other models is not guaranteed.
 
+## Preview
+
+![Turing Screen showing the theme library, Nightfall preview, and device controls](docs/images/app-preview.png)
+
+**Nightfall** — the bundled 480×320 theme, rendered at its native resolution:
+
+![Nightfall theme showing the clock, weather, CPU, GPU, memory, and network panels](docs/images/nightfall.png)
+
+Both previews use sample sensor data. Available live readings depend on your hardware and sensor source.
+
 ## Getting started
 
 - **Windows**: Run the installer, or fully extract the portable archive and launch `turing-screen-qt.exe`.

@@ -2,71 +2,92 @@
 
 English | [简体中文](protocol.zh-CN.md)
 
-Supported dimensions: 320×480 in portrait orientation and 480×320 in landscape orientation. Hardware and firmware revisions may differ. Byte examples below are hexadecimal, and byte offsets start at 0.
+Applies to 320×480 portrait and 480×320 landscape displays; hardware and firmware revisions may differ. Byte sequences are hexadecimal, coordinates and sizes are decimal. B0 is the first byte of a message.
 
-## Serial connection and messages
+## How it works
 
-- Baud rate: 115200; data format: 8N1.
-- Assert DTR and RTS; disable hardware and software flow control.
-- Each message consists of a **6-byte command header + optional payload**. Its length depends on the command.
-- The header has no fixed start marker, length field, sequence number, or CRC. Normal bitmap transfers do not wait for a per-frame ACK.
-- Send each message's header and payload consecutively, without inserting other commands. USB packet boundaries are not application-level message boundaries.
+The computer collects sensor data, renders images, and sends messages over the serial port. The display uses the command in each message to change its settings or update its picture.
 
-## Command header
+Every message has a **6-byte header** containing an operation code and four parameter fields. Commands that need additional data append a **payload**. The operation code and its parameters determine whether a payload exists and how long it is:
 
-The first 5 bytes pack four 10-bit fields in order. The last byte is the command:
+```text
+Commands
+├── Without payload: the entire message is a 6-byte header
+│   ├── Zero parameters: reset, clear, fill black, screen on/off, probe
+│   └── With parameters: brightness (value stored in the header)
+└── With payload: 6-byte header + additional data
+    ├── Control data: orientation, mirroring
+    └── Image data: RGB bitmap, extended image formats
+```
+
+## Common header
+
+All commands use the same encoding. **Field meanings depend on the command; field positions and widths do not change.**
+
+| Bytes | Contents |
+| --- | --- |
+| B0–B4 | Four packed 10-bit parameter fields: `x`, `y`, `end_x`, `end_y`, in that order. |
+| B5 | One-byte operation code, `command`. |
+
+The field names come from drawing: bitmap commands use them for top-left and bottom-right coordinates; brightness reuses `x` for its value; unused fields are zero. A command **without a payload can still have parameters**.
+
+Each parameter field encodes 0–1023. This reference uses `header(x, y, end_x, end_y, command)` for the following packing rule:
 
 ```text
 packed = (x << 30) | (y << 20) | (end_x << 10) | end_y
-B0..B4 = packed as 5 bytes in big-endian order
+B0..B4 = packed in big-endian order (most significant byte first)
 B5     = command
 ```
 
-| Byte | Contents |
+The packed value is 40 bits. In C/C++, cast fields to a 64-bit unsigned type before shifting. The payload is not part of this packing; its format is defined by each command.
+
+## Commands without payload
+
+The message ends at B5 and is always **6 bytes** long.
+
+### Zero-parameter commands
+
+Common format: `header(0, 0, 0, 0, command)`.
+
+| Code | Operation |
 | --- | --- |
-| B0 | x[9:2] |
-| B1 | Upper 2 bits: x[1:0]; lower 6 bits: y[9:4] |
-| B2 | Upper 4 bits: y[3:0]; lower 4 bits: end_x[9:6] |
-| B3 | Upper 6 bits: end_x[5:0]; lower 2 bits: end_y[9:8] |
-| B4 | end_y[7:0] |
-| B5 | Command |
+| `0x65` | Reset. |
+| `0x66` | Clear screen. |
+| `0x67` | Fill with black. |
+| `0x6C` | Screen off. |
+| `0x6D` | Screen on. |
+| `0xFF` | Connection probe; the reply determines firmware timing. |
 
-Each field can encode values from 0 to 1023. Drawing coordinates must also be within the current screen dimensions. Control commands may reuse the coordinate fields for parameters.
+Probe message: `00 00 00 00 00 FF`. For clear-screen compatibility, this project sets orientation to 0, sends `0x66`, then restores the previous orientation.
 
-## Control commands
+### Parameterized command: brightness — 0x6E
 
-| Command | Total length | Meaning and parameters |
-| --- | --- | --- |
-| `0x65` | 6 bytes | Reset; all four fields are 0. |
-| `0x66` | 6 bytes | Clear the screen; all four fields are 0. For compatibility, set orientation to 0 before clearing, then restore the previous orientation. |
-| `0x67` | 6 bytes | Fill with black; all four fields are 0. |
-| `0x6C` | 6 bytes | Turn the screen off; all four fields are 0. |
-| `0x6D` | 6 bytes | Turn the screen on; all four fields are 0. |
-| `0x6E` | 6 bytes | Set brightness; put the raw brightness value in x and set the other fields to 0. |
-| `0x79` | 16 bytes | Set orientation and dimensions; see below. |
-| `0x7A` | 16 bytes | Set mirroring; see below. |
-| `0xFF` | 6 bytes | Connection probe: `00 00 00 00 00 FF`. |
-
-### Brightness
-
-A raw value of `0` is brightest; `255` is darkest. Convert a percentage `p` (0–100) as follows:
+Format: `header(raw, 0, 0, 0, 0x6E)`. The raw value ranges from 0 to 255: 0 is brightest, 255 darkest. Percentage `p` (0–100) converts as follows:
 
 ```text
 raw = floor(255 × (100 - p) / 100)
 ```
 
-Brightest: `00 00 00 00 00 6E`; darkest: `3F C0 00 00 00 6E`. Brightness is packed into the x field, so it cannot be written directly into the first byte.
+Example: 75% → raw 63 → `0F C0 00 00 00 6E`. The brightness value is already in the header; no data follows it.
 
-### Orientation
+## Commands with payload
 
-| Offset | Contents |
+The payload starts at **B6**, after the header. Total length is `6 + payload bytes`. All offsets below are measured from the start of the entire message.
+
+### Control data
+
+Orientation and mirroring both use a header with zero parameters followed by a **10-byte payload**, for a total of **16 bytes**.
+
+#### Orientation — 0x79
+
+Header: `header(0, 0, 0, 0, 0x79)`.
+
+| Payload bytes | Contents |
 | --- | --- |
-| 0–4 | All zeros |
-| 5 | `79` |
-| 6 | Decimal `100 + direction` |
-| 7–8 | Width, 16-bit big-endian |
-| 9–10 | Height, 16-bit big-endian |
-| 11–15 | All zeros |
+| B6 | Decimal `100 + direction` |
+| B7–B8 | Width, 16-bit big-endian |
+| B9–B10 | Height, 16-bit big-endian |
+| B11–B15 | Zeros |
 
 | direction | Orientation | Width × height | B6 |
 | --- | --- | --- | --- |
@@ -75,38 +96,34 @@ Brightest: `00 00 00 00 00 6E`; darkest: `3F C0 00 00 00 6E`. Brightness is pack
 | 2 | Landscape | 480×320 | `66` |
 | 3 | Reverse landscape | 480×320 | `67` |
 
-Landscape example:
+Complete landscape message: `00 00 00 00 00 79 66 01 E0 01 40 00 00 00 00 00`.
+
+#### Mirroring — 0x7A
+
+Header: `header(0, 0, 0, 0, 0x7A)`. Payload byte B6 is `00` (off) or `01` (on); B7–B15 are zeros.
+
+### Image data
+
+Image commands specify the drawing location in the header and supply colors or pixels in the payload. Byte order is defined separately for each format below.
+
+#### RGB bitmap — 0xC5
+
+Used for full-screen and partial updates. The origin is top-left; x increases rightward, y downward. The rectangle includes its bottom-right endpoint and must fit the current display dimensions.
 
 ```text
-00 00 00 00 00 79 66 01 E0 01 40 00 00 00 00 00
+Header:  header(x, y, x + width - 1, y + height - 1, 0xC5)
+Payload: width × height × 2 bytes
+Order:   rows top to bottom, pixels left to right
 ```
 
-### Mirroring
-
-The first 5 bytes are 0, B5 is `7A`, B6 is `00` (off) or `01` (on), and B7–B15 are zero-filled. Example with mirroring enabled:
-
-```text
-00 00 00 00 00 7A 01 00 00 00 00 00 00 00 00 00
-```
-
-## RGB bitmap: 0xC5
-
-The header specifies a rectangle with an inclusive bottom-right endpoint, followed by tightly packed RGB565 pixels:
-
-```text
-Header: header(x, y, x + width - 1, y + height - 1, 0xC5)
-Payload length: width × height × 2 bytes
-Pixel order: rows from top to bottom, each row from left to right
-```
-
-Send each pixel in **little-endian** order, without an image file header, alpha channel, or row padding. Convert 8-bit RGB channels to RGB565 as follows:
+Each pixel is RGB565 (5 red, 6 green, 5 blue bits), sent **little-endian** (low byte first). There is no file header, alpha channel, or row padding. Conversion from 8-bit RGB channels:
 
 ```text
 rgb565 = ((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3)
-Send order: rgb565 & 0xFF, then rgb565 >> 8
+bytes  = [rgb565 & 0xFF, rgb565 >> 8]
 ```
 
-| Color | RGB565 | Bytes sent |
+| Color | RGB565 | Bytes |
 | --- | --- | --- |
 | Red | `F800` | `00 F8` |
 | Green | `07E0` | `E0 07` |
@@ -114,50 +131,49 @@ Send order: rgb565 & 0xFF, then rgb565 >> 8
 | White | `FFFF` | `FF FF` |
 | Black | `0000` | `00 00` |
 
-A full-screen update has a 307200-byte payload in either orientation:
+Full-screen payload: **307200 bytes**; total message: **307206 bytes**.
 
-| Dimensions | Top-left → bottom-right | Header |
+| Dimensions | Rectangle (inclusive) | Header |
 | --- | --- | --- |
-| 320×480 | (0, 0) → (319, 479) | `00 00 04 FD DF C5` |
-| 480×320 | (0, 0) → (479, 319) | `00 00 07 7D 3F C5` |
+| 320×480 | (0, 0)–(319, 479) | `00 00 04 FD DF C5` |
+| 480×320 | (0, 0)–(479, 319) | `00 00 07 7D 3F C5` |
 
-Complete message for drawing two red pixels horizontally, starting at (10, 20):
+Example: a red 2×1 rectangle at (10, 20), ending at (11, 20). The first 6 bytes are the header; the last 4 bytes are two red pixels:
 
 ```text
 02 81 40 2C 14 C5 00 F8 00 F8
 ```
 
-Partial updates also use `0xC5`; only the rectangle coordinates and corresponding payload length change.
+#### Extension: single-color point list — 0xC3
 
-## Transmission timing
-
-After connecting, you can send the probe, orientation, mirroring, and brightness commands in that order. Wait 10 ms after each orientation or mirroring command.
-
-- **V1**: Wait 10 ms after sending the bitmap header before sending the pixels. Wait another 10 ms after the pixels have been sent.
-- **V2**: Omit both bitmap-transfer waits described above. Keep the waits after orientation and mirroring commands.
-
-Use V2 timing if the probe response contains ASCII `V2`. If the version cannot be determined, use V1 timing.
-
-## Extended commands
-
-The following sections describe known message layouts only. Do not assume that all Rev A firmware supports them.
-
-### Single-color point list: 0xC3
-
-The message is always 64 bytes long:
+Known layout, **64 bytes total** (6-byte header + 58-byte payload); support across Rev A firmware is not guaranteed.
 
 ```text
 B0..B5 = header(base_x, base_y, coord_byte_count, 0, 0xC3)
-B6..B7 = RGB565 color, high byte first
+B6..B7 = RGB565 color, big-endian (high byte first)
 B8..   = dx0, dy0, dx1, dy1, ...
 ```
 
-`coord_byte_count` is the number of valid coordinate bytes. It must be even and at most 56 bytes, representing up to 28 points. Each coordinate component occupies 1 byte; any remaining trailing bytes are not valid coordinates.
+`coord_byte_count` counts valid coordinate bytes: even, at most 56 (28 points). Each component is 1 byte; trailing bytes are not coordinates. Coordinates are relative to the base point; actual firmware drawing behavior remains unconfirmed.
 
-This command uses **big-endian** color, unlike `0xC5`. Coordinates are interpreted relative to the base point, but the firmware's actual point-drawing behavior still needs verification.
+#### Extension: monochrome bitmap — 0xC6
 
-### Monochrome bitmap: 0xC6
+Known layout; support across Rev A firmware is not guaranteed. The rectangle header is the same as `0xC5`, with command `0xC6`. The payload packs pixels sequentially at 1 bit per pixel, most significant bit first within each byte.
 
-The rectangle header has the same format as `0xC5`, with the command changed to `0xC6`. Pixels are packed sequentially at 1 bit per pixel, most significant bit first within each byte.
+Known sizes: 68×90 → 765 payload bytes; 48×66 → 396 payload bytes. There is no color field; bit-to-color mapping and background handling remain unconfirmed.
 
-Known dimensions include 68×90 (765 bytes) and 48×66 (396 bytes). The message carries no color. The firmware determines which colors the bit values represent and how the background is handled; this behavior has not been confirmed. Do not use RGB565 data as the payload for this command.
+## Transmission rules
+
+- **Serial settings:** 115200 baud, 8N1 (8 data bits, no parity, 1 stop bit). DTR/RTS asserted; hardware and software flow control disabled.
+- **Message boundaries:** no start/end marker, separate length field, sequence number, or CRC. USB packet boundaries do not delimit messages.
+- **Ordering:** a header and its payload must not be interleaved with other commands. Normal bitmap transfers do not wait for a per-frame ACK.
+
+A probe response containing ASCII `V2` selects V2 timing; otherwise use V1:
+
+| After sending | V1 wait | V2 wait |
+| --- | --- | --- |
+| Orientation / mirroring command | 10 ms | 10 ms |
+| RGB bitmap header, before pixel data | 10 ms | None |
+| RGB bitmap payload, before next command | 10 ms | None |
+
+Implementation: [src/device.cpp](../src/device.cpp). Known-byte tests: [protocol()](../tests/core_test.cpp).

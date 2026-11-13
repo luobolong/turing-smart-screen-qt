@@ -6,6 +6,16 @@
 
 适用于 **35inchNEW / Rev A，320×480 或 480×320** 的设备，其他型号不保证兼容。
 
+## 预览
+
+![Turing Screen 软件界面：主题库、Nightfall 预览和设备控制](docs/images/app-preview.zh-CN.png)
+
+**Nightfall** — 内置的 480×320 主题，以下按原始分辨率展示：
+
+![Nightfall 主题：时钟、天气、CPU、GPU、内存和网络面板](docs/images/nightfall.png)
+
+两张预览图均使用示例传感器数据；实际可读取的指标取决于硬件和传感器来源。
+
 ## 开始使用
 
 - **Windows**：运行安装包，或完整解压便携包后打开 `turing-screen-qt.exe`。
