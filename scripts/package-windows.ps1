@@ -6,7 +6,7 @@ $ErrorActionPreference='Stop'
 $taskRoot=Split-Path $PSScriptRoot -Parent
 Push-Location $taskRoot
 try {
-    $taskDestination=if(!$Destination){Join-Path $taskRoot 'dist/turing-screen-qt-0.2.1-windows-x64'}elseif([IO.Path]::IsPathRooted($Destination)){$Destination}else{Join-Path $taskRoot $Destination}
+    $taskDestination=if(!$Destination){Join-Path $taskRoot 'dist/turing-screen-qt-0.2.2-windows-x64'}elseif([IO.Path]::IsPathRooted($Destination)){$Destination}else{Join-Path $taskRoot $Destination}
     if(Test-Path -LiteralPath $taskDestination){throw 'Release directory already exists; choose or archive the existing release first.'}
     New-Item -ItemType Directory -Path $taskDestination,"$taskDestination/licenses" -Force | Out-Null
     Copy-Item -LiteralPath 'build/windows/Release/turing-screen-qt.exe' -Destination $taskDestination

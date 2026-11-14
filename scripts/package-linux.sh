@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
-output="dist/turing-screen-qt-0.2.1-linux-x64"
+output="dist/turing-screen-qt-0.2.2-linux-x64"
 test ! -e "$output" || test "${1:-}" = --refresh || { echo 'Release directory already exists; use --refresh to update it' >&2; exit 1; }
 mkdir -p "$output/lib" "$output/plugins/platforms" "$output/plugins/imageformats" "$output/licenses"
 cp build/linux/turing-screen-qt "$output/"
