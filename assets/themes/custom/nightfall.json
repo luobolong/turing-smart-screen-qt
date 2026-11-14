@@ -12,7 +12,7 @@
         {
             "children": [
                 {
-                    "align": "center",
+                    "align": "right",
                     "clip": true,
                     "elide": false,
                     "fit": true,
@@ -41,7 +41,7 @@
                     "valign": "bottom",
                     "visible": true,
                     "w": 48,
-                    "x": 0,
+                    "x": 8,
                     "y": 2
                 },
                 {
@@ -230,7 +230,7 @@
                     "valign": "bottom",
                     "visible": true,
                     "w": 30,
-                    "x": 32,
+                    "x": 18,
                     "y": 14
                 },
                 {
@@ -273,7 +273,7 @@
                     "align": "left",
                     "baseline": 15,
                     "clip": true,
-                    "elide": true,
+                    "elide": false,
                     "font": {
                         "bold": false,
                         "color": [
@@ -294,11 +294,12 @@
                     "long_text": true,
                     "metric": "WeatherCondition",
                     "name": "weather-condition",
+                    "shrink_to_fit": true,
                     "text": "",
                     "valign": "bottom",
                     "visible": true,
-                    "w": 54,
-                    "x": 32,
+                    "w": 64,
+                    "x": 18,
                     "y": 46
                 },
                 {
@@ -336,6 +337,11 @@
             ],
             "h": 0,
             "id": "nightfall-WEATHER",
+            "expand_left": {
+                "metric": "WeatherCondition",
+                "followers": ["WeatherIcon"],
+                "min_x": 0
+            },
             "kind": "group",
             "locked": false,
             "name": "WEATHER",

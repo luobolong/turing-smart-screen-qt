@@ -214,6 +214,14 @@ static QString sensorText(const QJsonObject &layer, const Snapshot &sample) {
 static QString paintedValue(const QJsonObject &layer, const Snapshot &sample) {
     const auto kind = layer["kind"].toString();
     const auto metric = layer["metric"].toString();
+    if (kind == "group") {
+        QString result;
+        for (const auto &child : layer["children"].toArray()) {
+            const auto value = paintedValue(child.toObject(), sample);
+            result += QString::number(value.size()) + ':' + value;
+        }
+        return result;
+    }
     if (kind == "sensor") {
         const bool present = sample.values.contains(canonical(metric)) || sample.strings.contains(canonical(metric));
         return (present ? QStringLiteral("v:") : QStringLiteral("m:")) + sensorText(layer, sample);
@@ -230,6 +238,12 @@ void Renderer::flatten(const QJsonArray &array, QPoint offset) {
         if (!layer["visible"].toBool(true)) continue;
         const auto kind = layer["kind"].toString();
         if (kind == "group") {
+            // Keep adaptive siblings together so a value change invalidates both
+            // their old and new positions, including an otherwise unchanged icon.
+            if (layer["expand_left"].isObject()) {
+                nodes.append({layer, offset, {}, {}, true});
+                continue;
+            }
             const auto children = layer.take("children").toArray();
             if (!layer["background"].toString().isEmpty()) nodes.append({layer, offset, {}, {}, false});
             flatten(children, offset + QPoint(layer["x"].toInt(), layer["y"].toInt()));
@@ -337,6 +351,53 @@ bool Renderer::unchanged(const Theme &theme, const Snapshot &sample) const {
         if (node.dynamic && node.value != paintedValue(node.layer, sample)) return false;
     return true;
 }
+static QString layerText(const QJsonObject &layer, const Snapshot &sample, bool example) {
+    const auto key = layer["metric"].toString();
+    const bool sensor = layer["kind"] == "sensor";
+    auto text = sensor ? sensorText(layer, sample) : layer["text"].toString();
+    if (example && sensor) {
+        text = canonical(key) == "Time" ? QString("23:58")
+             : canonical(key) == "CpuFreq" ? QString("4.8")
+             : layer["text"].toString().replace('x', '8');
+        if (text.isEmpty()) text = sample.text(key, layer["length"].toInt() > 0);
+    }
+    const int length = layer["length"].toInt();
+    if (!layer["long_text"].toBool(true) && length > 0)
+        text = text.rightJustified(length, ' ').right(length);
+    if (sensor && layer.contains("missing_text") && !sample.values.contains(canonical(key)) &&
+        !sample.strings.contains(canonical(key)))
+        text = layer["missing_text"].toString();
+    return text;
+}
+QJsonArray Renderer::layoutChildren(const QJsonObject &group, const Snapshot &sample, bool example) {
+    auto children = group["children"].toArray();
+    const auto rule = group["expand_left"].toObject();
+    const auto metric = rule["metric"].toString();
+    if (metric.isEmpty()) return children;
+    for (int i = 0; i < children.size(); ++i) {
+        auto source = children[i].toObject();
+        if (source["kind"] != "sensor" || source["metric"] != metric || !source["visible"].toBool(true))
+            continue;
+        const auto text = layerText(source, sample, example).left(1024);
+        const QFontMetricsF metrics(textFont(source["font"].toObject(), text));
+        const int width = source["w"].toInt();
+        const int required = int(std::ceil(qMax(metrics.horizontalAdvance(text), metrics.boundingRect(text).right())));
+        const int shift = qBound(0, required - width, qMax(0, source["x"].toInt() - rule["min_x"].toInt()));
+        if (!shift) break;
+        source["x"] = source["x"].toInt() - shift;
+        source["w"] = width + shift;
+        children[i] = source;
+        for (int j = 0; j < children.size(); ++j) {
+            auto follower = children[j].toObject();
+            if (j != i && rule["followers"].toArray().contains(follower["metric"])) {
+                follower["x"] = follower["x"].toInt() - shift;
+                children[j] = follower;
+            }
+        }
+        break;
+    }
+    return children;
+}
 void Renderer::layers(QImage &out, const QJsonArray &a, const Snapshot &s, QPoint offset, bool example) {
     for (auto v : a) {
         auto l = v.toObject();
@@ -348,28 +409,14 @@ void Renderer::layers(QImage &out, const QJsonArray &a, const Snapshot &s, QPoin
             auto bg = decode(l["background"].toString());
             if (!bg.isNull())
                 image(out, bg, at, paintClip);
-            layers(out, l["children"].toArray(), s, at, example);
+            layers(out, layoutChildren(l, s, example), s, at, example);
         } else if (kind == "bar")
             bar(out, l, at, s, example);
         else if (kind == "arc")
             arc(out, l, at, s, example);
         else if (kind == "text" || kind == "sensor") {
-            auto key = l["metric"].toString();
-            auto txt = kind == "text" ? l["text"].toString() : sensorText(l, s);
-            if (example && kind == "sensor") {
-                txt = canonical(key) == "Time"      ? QString("23:58")
-                      : canonical(key) == "CpuFreq" ? QString("4.8")
-                                                    : l["text"].toString().replace('x', '8');
-                if (txt.isEmpty())
-                    txt = s.text(key, l["length"].toInt() > 0);
-            }
-            int length = l["length"].toInt();
-            if (!l["long_text"].toBool(true) && length > 0)
-                txt = txt.rightJustified(length, ' ').right(length);
+            const auto txt = layerText(l, s, example);
             auto font = l["font"].toObject();
-            if (kind == "sensor" && l.contains("missing_text") &&
-                !s.values.contains(canonical(key)) && !s.strings.contains(canonical(key)))
-                txt = l["missing_text"].toString();
             if (l.contains("align") || l.contains("valign") || l.contains("baseline") || l["fit"].toBool() ||
                 l["shrink_to_fit"].toBool() ||
                 l["clip"].toBool() || l["elide"].toBool() || l["wrap"].toBool()) {
@@ -419,6 +466,29 @@ void Renderer::layers(QImage &out, const QJsonArray &a, const Snapshot &s, QPoin
                 p.drawRect(r.adjusted(sw / 2., sw / 2., -sw / 2., -sw / 2.));
         }
     }
+}
+QFont Renderer::textFont(const QJsonObject &f, const QString &str) {
+    if (fontFamily.isEmpty()) fontFamily = screenFontFamily();
+    const bool symbols = f["family"] == "Turing Screen Symbols";
+    QFont font(symbols ? symbolFontFamily()
+                      : f["family"] == "Turing Screen Latin" ? latinFontFamily()
+                      : f["family"] == "Turing Screen Mono" ? monoFontFamily() : fontFamily);
+    font.setPixelSize(f["size"].toInt(18));
+    font.setBold(f["bold"].toBool());
+    font.setStyleStrategy(QFont::StyleStrategy(QFont::NoFontMerging | QFont::PreferAntialias));
+    // Measure and paint with the same fallback font, including user-entered CJK text.
+    QFontMetrics metrics(font);
+    for (auto ch : str.left(1024)) {
+        if (!symbols && !metrics.inFont(ch)) {
+            static QString completeFamily = [] {
+                int id = QFontDatabase::addApplicationFont(assets() + "/fonts/NotoSansSC.ttf");
+                return QFontDatabase::applicationFontFamilies(id).value(0, screenFontFamily());
+            }();
+            font.setFamily(completeFamily);
+            break;
+        }
+    }
+    return font;
 }
 void Renderer::text(QImage &out, const QString &str, QPoint at, const QJsonObject &f, bool longText) {
     int px = f["size"].toInt(18);
@@ -474,31 +544,10 @@ void Renderer::text(QImage &out, const QString &str, QPoint at, const QJsonObjec
         }
         return;
     }
-    if (fontFamily.isEmpty())
-        fontFamily = screenFontFamily();
     QPainter p(&out);
     p.setClipRect(paintClip);
     p.setPen(tint);
-    const bool symbols = f["family"] == "Turing Screen Symbols";
-    QFont font(symbols ? symbolFontFamily()
-                      : f["family"] == "Turing Screen Latin" ? latinFontFamily()
-                      : f["family"] == "Turing Screen Mono" ? monoFontFamily() : fontFamily);
-    font.setPixelSize(px);
-    font.setBold(f["bold"].toBool());
-    font.setStyleStrategy(QFont::StyleStrategy(QFont::NoFontMerging | QFont::PreferAntialias));
-    // Keep the common UI font small; load the complete CJK face only when a
-    // user actually enters a character outside the shipped subset.
-    QFontMetrics metrics(font);
-    for (auto ch : str.left(1024)) {
-        if (!symbols && !metrics.inFont(ch)) {
-            static QString completeFamily = [] {
-                int id = QFontDatabase::addApplicationFont(assets() + "/fonts/NotoSansSC.ttf");
-                return QFontDatabase::applicationFontFamilies(id).value(0, screenFontFamily());
-            }();
-            font.setFamily(completeFamily);
-            break;
-        }
-    }
+    QFont font = textFont(f, str);
     const QFontMetricsF lineMetrics(font);
     const int boxWidth = f["_box_width"].toInt();
     if (boxWidth > 0 && f["_shrink_to_fit"].toBool()) {

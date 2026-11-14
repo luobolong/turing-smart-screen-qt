@@ -727,6 +727,67 @@ private slots:
         theme.data["layers"] = QJsonArray{label};
         QCOMPARE(shortLabel, renderer.render(theme, {}));
     }
+    void nightfallWeatherExpandsWithoutClippingOrStalePixels() {
+        auto theme = Theme::load(assets() + "/themes/custom/nightfall.json");
+        const auto original = theme.data;
+        auto weather = findLayer(theme.layers(), "nightfall-WEATHER");
+        const auto condition = findLayer(theme.layers(), "nightfall-weather-condition");
+        const auto icon = findLayer(theme.layers(), "nightfall-weather-icon");
+        weather["children"] = QJsonArray{icon, condition};
+        theme.data["layers"] = QJsonArray{weather};
+        theme.data["background_color"] = rgba(Qt::transparent);
+        const auto inkBounds = [](const QImage &image) {
+            QRect bounds;
+            for (int y = 0; y < image.height(); ++y)
+                for (int x = 0; x < image.width(); ++x)
+                    if (image.pixelColor(x, y).alpha()) bounds |= QRect(x, y, 1, 1);
+            return bounds;
+        };
+        Renderer incremental, reference;
+        Snapshot sample;
+        // Keep the icon's value constant: condition changes alone must move and erase it.
+        sample.strings["WeatherIcon"] = WeatherClient::icon(2);
+        sample.strings["WeatherCondition"] = "Clear";
+        const auto initial = incremental.render(theme, sample);
+        const auto initialIcon = inkBounds(initial.copy(0, 18, 480, 30));
+        bool moved = false;
+        for (int code : {0, 1, 2, 3, 45, 51, 56, 61, 71, 80, 85, 95, -1, 0}) {
+            const auto description = WeatherClient::description(code);
+            sample.strings["WeatherCondition"] = description;
+            const auto actual = incremental.render(theme, sample);
+            QCOMPARE(actual, reference.renderFull(theme, sample));
+            QVERIFY(incremental.unchanged(theme, sample));
+            const auto row = actual.copy(0, 50, 480, 19);
+            const auto bounds = inkBounds(row);
+            QVERIFY2(QRect(318, 0, 82, 19).contains(bounds), qPrintable(description));
+
+            // Compare every painted glyph with a generously sized, unclipped label.
+            // This detects both ellipses and clipped endings without assuming font metrics.
+            auto complete = condition;
+            complete["x"] = 10;
+            complete["y"] = 50;
+            complete["w"] = 460;
+            complete["shrink_to_fit"] = false;
+            complete["elide"] = false;
+            auto expectedTheme = theme;
+            expectedTheme.data["layers"] = QJsonArray{complete};
+            const auto expectedRow = reference.renderFull(expectedTheme, sample).copy(0, 50, 480, 19);
+            const auto expectedBounds = inkBounds(expectedRow);
+            QCOMPARE(row.copy(bounds), expectedRow.copy(expectedBounds));
+            const int shift = 318 + condition["x"].toInt() + expectedBounds.left() - 10 - bounds.left();
+            QVERIFY(shift >= 0);
+            moved |= shift > 0;
+            const auto iconRow = actual.copy(0, 18, 480, 30);
+            const auto iconBounds = inkBounds(iconRow);
+            QCOMPARE(iconBounds, initialIcon.translated(-shift, 0));
+            QCOMPARE(iconRow.copy(iconBounds), initial.copy(0, 18, 480, 30).copy(initialIcon));
+            QCOMPARE(incremental.render(theme, sample), actual);
+            QVERIFY(incremental.lastDirtyRect().isEmpty());
+        }
+        QVERIFY(moved);
+        QCOMPARE(incremental.render(theme, sample), initial);
+        QCOMPARE(Theme::load(assets() + "/themes/custom/nightfall.json").data, original);
+    }
     void nativeTextBaselineStability() {
         Renderer renderer;
         auto theme = Theme::starter();

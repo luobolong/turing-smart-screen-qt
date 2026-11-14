@@ -1112,7 +1112,13 @@ void MainWindow::buildDevicePanel(QWidget *w) {
         device.command(5, int(v));
         persist();
     });
+    connectButton = button({}, rv, [this] { connectDevice(); });
+    connectButton->setObjectName("connectDevice");
+    sendButton = button({}, rv, [this] { toggleSend(); });
+    sendButton->setObjectName("sendButton");
+    sendButton->setProperty("uiRole", "primary");
     auto advanced = new QToolButton;
+    advanced->setObjectName("advancedDeviceOperations");
     advanced->setText(L("高级设备操作", "Advanced operations"));
     advanced->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
     auto advancedMenu = new QMenu(advanced);
@@ -1132,11 +1138,6 @@ void MainWindow::buildDevicePanel(QWidget *w) {
     advanced->setPopupMode(QToolButton::InstantPopup);
     rv->addWidget(advanced);
     advanced->setProperty("deviceOperation", true);
-    connectButton = button({}, rv, [this] { connectDevice(); });
-    connectButton->setObjectName("connectDevice");
-    sendButton = button({}, rv, [this] { toggleSend(); });
-    sendButton->setObjectName("sendButton");
-    sendButton->setProperty("uiRole", "primary");
     rv->addStretch();
     scroll->setWidget(content);
     layout->addWidget(scroll);

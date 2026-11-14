@@ -63,8 +63,10 @@ def panel(key, x, y, h, children):
     return group(key, x, y, [background, *children])
 
 
+system_logo = icon("system-logo", None, 8, HEADER_BASELINE - 15, "system", size=48, metric="OsIcon")
+system_logo["align"] = "right"
 system = group("SYSTEM", 12, 15, [
-    icon("system-logo", None, 0, HEADER_BASELINE - 15, "system", size=48, metric="OsIcon"),
+    system_logo,
     text("system-version", "", 56, 20, 98, 15, "muted", metric="OsName", shrink_to_fit=True),
     text("system-kernel", "", 56, HEADER_BASELINE - 15, 110, 12, "muted", metric="KernelVersion",
          shrink_to_fit=True),
@@ -76,15 +78,19 @@ clock = group("CLOCK", 166, 7, [
     text("clock-calendar", "", 0, HEADER_BASELINE - 7, 148, 12, "muted", metric="DateWeekday", align="center"),
 ])
 
-weather_icon = icon("weather-icon", None, 32, 44, "weather", size=30, metric="WeatherIcon")
+weather_icon = icon("weather-icon", None, 18, 44, "weather", size=30, metric="WeatherIcon")
 weather_icon["align"] = "left"
+weather_condition = text("weather-condition", "", 18, HEADER_BASELINE - 4, 64, 11, "weather",
+                         metric="WeatherCondition", shrink_to_fit=True)
+weather_condition["elide"] = False
 weather = group("WEATHER", 318, 4, [
     weather_icon,
     text("weather-temperature", "", 56, 44, 94, 28, "weather", metric="WeatherTemp", bold=True, align="right",
          value_format=dict(decimals=0, suffix="°C")),
-    text("weather-condition", "", 32, HEADER_BASELINE - 4, 54, 11, "weather", metric="WeatherCondition"),
+    weather_condition,
     text("weather-city", "", 86, HEADER_BASELINE - 4, 64, 11, "weather", metric="WeatherCity", align="right"),
 ])
+weather["expand_left"] = dict(metric="WeatherCondition", followers=["WeatherIcon"], min_x=0)
 
 cpu = panel("CPU", 12, 80, 138, [
     icon("cpu-chip", "cpu", 12, 23, "cpu", size=14),
