@@ -191,24 +191,24 @@ static void collectLocalIp(Snapshot &s, const QString &procRoot) {
     }
 #endif
     int bestScore = -1;
-    for (const auto &interface : QNetworkInterface::allInterfaces()) {
-        const auto flags = interface.flags();
+    for (const auto &networkInterface : QNetworkInterface::allInterfaces()) {
+        const auto flags = networkInterface.flags();
         if (!(flags & QNetworkInterface::IsUp) || !(flags & QNetworkInterface::IsRunning) ||
             (flags & QNetworkInterface::IsLoopBack))
             continue;
-        for (const auto &entry : interface.addressEntries()) {
+        for (const auto &entry : networkInterface.addressEntries()) {
             const auto address = entry.ip();
             if (address.isNull() || address.isLoopback() || address.isLinkLocal() || address.isMulticast())
                 continue;
             int score = address.protocol() == QAbstractSocket::IPv4Protocol ? 10000 : 0;
-            if (interface.name() == defaultInterface)
+            if (networkInterface.name() == defaultInterface)
                 score += 1000;
-            if (interface.type() == QNetworkInterface::Ethernet || interface.type() == QNetworkInterface::Wifi)
+            if (networkInterface.type() == QNetworkInterface::Ethernet || networkInterface.type() == QNetworkInterface::Wifi)
                 score += 100;
             if (score > bestScore) {
                 bestScore = score;
                 s.strings["LocalIp"] = address.toString();
-                s.sources["LocalIp"] = "Active network interface: " + interface.name();
+                s.sources["LocalIp"] = "Active network interface: " + networkInterface.name();
             }
         }
     }

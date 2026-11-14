@@ -118,6 +118,13 @@ QTabBar::tab:hover { background: @button@; color: @text@; }
 QTabBar::tab:selected { color: @text@; border-bottom-color: @accent@; }
 QToolBar { background: @window@; border: none; spacing: 3px; padding: 2px 0; }
 QToolBar::separator { background: @border@; width: 1px; margin: 5px; }
+QToolBar#editorTools { background: @base@; border: 1px solid @border@; border-radius: 5px; padding: 3px; spacing: 2px; }
+QToolBar#editorTools QToolButton { padding: 5px; min-width: 22px; min-height: 22px; border-radius: 3px; }
+QToolBar#editorTools QToolButton:checked { background: @selection_tint@; border-left: 2px solid @accent@; }
+QToolBar#editorTools::separator { height: 1px; width: 26px; margin: 5px 3px; }
+QToolBar#layerTools { background: @base@; border-top: 1px solid @border@; padding: 3px 2px; spacing: 1px; }
+QToolBar#layerTools QToolButton { padding: 4px; min-width: 18px; min-height: 18px; border-radius: 3px; }
+QTreeWidget#layerTree { border: none; border-radius: 0; }
 QScrollArea { background: transparent; border: none; }
 QScrollBar:vertical { background: transparent; width: 10px; margin: 2px; }
 QScrollBar:horizontal { background: transparent; height: 10px; margin: 2px; }

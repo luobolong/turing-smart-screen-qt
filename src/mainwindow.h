@@ -31,6 +31,7 @@ class QStackedWidget;
 class QSplitter;
 class QToolBar;
 class QAction;
+class QMenu;
 namespace Screen {
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -114,6 +115,7 @@ private:
     QPushButton *modeButton = nullptr, *connectButton = nullptr, *sendButton = nullptr,
                 *saveButton = nullptr;
     QAction *deleteThemeAction = nullptr, *undoAction = nullptr, *redoAction = nullptr;
+    QHash<QString, QAction *> layerActions;
     QComboBox *portBox = nullptr, *directionBox = nullptr, *bindingBox = nullptr;
     QSlider *brightness = nullptr;
     QLineEdit *layerName = nullptr, *layerText = nullptr;
@@ -190,6 +192,8 @@ private:
     void createLayer(const QString &kind, QPointF point = {24, 24}, QSizeF size = {100, 30});
     void addComponent(const QString &kind);
     void layerAction(const QString &action);
+    void populateLayerMenu(QMenu *menu);
+    void updateLayerActions();
     void contextMenu(QPoint global);
     void reparent(const QStringList &ids, const QString &parent, int index = -1);
     void rename();

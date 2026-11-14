@@ -1,6 +1,7 @@
 #include "mainwindow.h"
 #include "application.h"
 #include "uiappearance.h"
+#include "nativetraymenu.h"
 #include "pseudoscreen.h"
 #include "weathernetwork.h"
 #include <QJsonDocument>
@@ -1682,6 +1683,142 @@ private slots:
         QVERIFY(w.dataState->mapTo(&w, QPoint()).x() > w.width() / 2);
         QVERIFY2(unexpectedDialog.isEmpty(), qPrintable(unexpectedDialog));
     }
+    void editorToolsAndLayerFooterKeepActionsAccessible() {
+        TestProfile dir;
+        MainWindow w(dir.path());
+        w.sampling.stop(); w.resize(1280, 820); w.show(); w.setEditing(true);
+        const auto restore = qScopeGuard([&] { w.dirty = false; w.quitting = true; UiAppearance::instance().apply("system", dir.path()); });
+        auto tools = w.findChild<QToolBar *>("editorTools");
+        auto footer = w.findChild<QToolBar *>("layerTools");
+        QVERIFY(tools && footer);
+        QCOMPARE(tools->orientation(), Qt::Vertical);
+        QCOMPARE(tools->toolButtonStyle(), Qt::ToolButtonIconOnly);
+        QTRY_VERIFY(tools->mapTo(&w, tools->rect().topRight()).x() < w.canvas->mapTo(&w, QPoint()).x());
+        QVERIFY(footer->mapTo(&w, QPoint()).y() > w.tree->mapTo(&w, w.tree->rect().bottomLeft()).y());
+        for (const auto name : {"editorNewLayer", "editorComponents", "themeOptions"}) {
+            auto button = tools->findChild<QToolButton *>(name);
+            QVERIFY(button && button->menu() && !button->icon().isNull());
+            QVERIFY(!button->accessibleName().isEmpty());
+        }
+        auto textTool = tools->findChild<QAction *>("editorTool_text");
+        auto moveTool = tools->findChild<QAction *>("editorTool_move");
+        QVERIFY(textTool && moveTool);
+        textTool->trigger(); QCOMPARE(w.canvas->tool, QString("text"));
+        QVERIFY(textTool->isChecked() && !moveTool->isChecked());
+        tools->findChild<QAction *>("editorTool_rectangle")->trigger();
+        dragCanvas(*w.canvas, {30, 30}, {75, 60});
+        QCOMPARE(w.selection().size(), 1);
+        QCOMPARE(findLayer(w.theme.layers(), w.selection().first())["kind"].toString(), QString("rectangle"));
+        moveTool->trigger(); QCOMPARE(w.canvas->tool, QString("move"));
+        QCOMPARE(w.inspectorTabs->currentIndex(), 0); // Selecting the canvas keeps the layer panel available.
+        QVERIFY(w.layerActions["duplicate"]->isEnabled());
+        QVERIFY(!w.layerActions["ungroup"]->isEnabled());
+        w.layerActions["copy"]->trigger(); QVERIFY(w.layerActions["paste"]->isEnabled());
+        const auto original = w.selection();
+        w.layerActions["paste"]->trigger(); QVERIFY(w.selection() != original);
+        w.selection({});
+        QVERIFY(!w.layerActions["delete"]->isEnabled());
+        QVERIFY(!w.layerActions["rename"]->isEnabled());
+        QVERIFY(w.layerActions["paste"]->isEnabled());
+        const auto shots = qEnvironmentVariable("TURING_EDITOR_UI_SHOTS");
+        for (const auto size : {QSize(1280, 820), QSize(760, 680)}) {
+            w.resize(size); QCoreApplication::processEvents();
+            QVERIFY(tools->mapTo(&w, tools->rect().topRight()).x() < w.canvas->mapTo(&w, QPoint()).x());
+            for (auto action : footer->actions()) {
+                auto button = footer->widgetForAction(action);
+                QVERIFY(button && button->isVisible());
+                QVERIFY(footer->rect().contains(button->geometry()));
+            }
+            if (!shots.isEmpty()) {
+                w.selectUiTheme("catppuccin-mocha");
+                QDir().mkpath(shots);
+                QVERIFY(w.grab().save(shots + QString("/editor-%1.png").arg(size.width())));
+            }
+        }
+        w.resize(1280, 820);
+        w.selection(original);
+        bool inspected = false;
+        QTimer::singleShot(0, &w, [&] {
+            auto menu = w.findChild<QMenu *>("layerContextMenu");
+            QVERIFY(menu);
+            const auto close = qScopeGuard([&] { menu->close(); });
+            QCOMPARE(menu->actions().first(), w.layerActions["properties"]);
+            const auto actions = menu->actions();
+            QCOMPARE(std::count_if(actions.begin(), actions.end(), [](QAction *a) { return a->isSeparator(); }), 4);
+            auto arrange = menu->findChild<QMenu *>("layerArrangeMenu");
+            QVERIFY(arrange && arrange->isEnabled());
+            QVERIFY(menu->actions().last()->menu());
+            QCOMPARE(menu->actions().last()->menu()->actions().size(), 9);
+            inspected = true;
+        });
+        w.contextMenu(w.tree->mapToGlobal(QPoint(20, 40)));
+        QVERIFY(inspected);
+        if (!shots.isEmpty()) {
+            w.english = false; w.build();
+            w.choose(dir.path() + "/themes/custom/nightfall.json");
+            w.setEditing(true); w.inspectorTabs->setCurrentIndex(0);
+            w.resize(1280, 820); QCoreApplication::processEvents();
+            QTRY_COMPARE(w.editorSplit->orientation(), Qt::Horizontal);
+            QFile sample(QFINDTESTDATA("fixtures/nightfall-windows-sample.json"));
+            QVERIFY(sample.open(QIODevice::ReadOnly));
+            w.sample = Snapshot::fromJson(QJsonDocument::fromJson(sample.readAll()).object());
+            w.render(); w.tree->expandAll();
+            QVERIFY(w.grab().save(shots + "/editor-final.png"));
+            w.selection({"nightfall-cpu-model"});
+            QTimer::singleShot(0, &w, [&] {
+                auto menu = w.findChild<QMenu *>("layerContextMenu");
+                if (menu) { menu->grab().save(shots + "/editor-context-menu.png"); menu->close(); }
+            });
+            w.contextMenu(w.tree->mapToGlobal(QPoint(20, 40)));
+        }
+    }
+    void trayMenuUsesNativeWindowsItems() {
+#ifdef Q_OS_WIN
+        TestProfile dir;
+        const auto restore = qScopeGuard([&] { UiAppearance::instance().apply("system", dir.path()); });
+        ApplicationController app(dir.path(), {}, [] { return true; });
+        QVERIFY(!app.tray->contextMenu()); // No Qt popup is attached on Windows.
+        app.listPorts = [] { return QList<Port>{{"TEST-PORT", "Test port", false}}; };
+        app.refreshPortMenu();
+        auto hidden = app.menu->addAction("Hidden");
+        hidden->setVisible(false);
+        for (const auto &theme : {QString("catppuccin-mocha"), QString("catppuccin-latte")}) {
+            app.window()->selectUiTheme(theme);
+            NativeTrayMenu native(app.menu.get());
+            QVERIFY(native.handle);
+            QCOMPARE(GetMenuItemCount(native.handle), 9);
+            for (int index = 0; index < 9; ++index) {
+                MENUITEMINFOW item{};
+                item.cbSize = sizeof(item);
+                item.fMask = MIIM_FTYPE | MIIM_STATE | MIIM_CHECKMARKS | MIIM_BITMAP;
+                QVERIFY(GetMenuItemInfoW(native.handle, UINT(index), TRUE, &item));
+                QVERIFY(!(item.fType & MFT_OWNERDRAW));
+                QVERIFY(!item.hbmpChecked && !item.hbmpUnchecked && !item.hbmpItem);
+                const auto action = app.menu->actions()[index];
+                QCOMPARE(bool(item.fType & MFT_SEPARATOR), action->isSeparator());
+                QCOMPARE(bool(item.fState & MFS_CHECKED), action->isCheckable() && action->isChecked());
+                if (!action->isSeparator()) QCOMPARE(bool(item.fState & MFS_DISABLED), !action->isEnabled());
+            }
+            auto ports = GetSubMenu(native.handle, 3);
+            QVERIFY(ports);
+            QCOMPARE(GetMenuItemCount(ports), 4);
+            auto port = app.portsMenu->actions().first();
+            QCOMPARE(native.commands.value(GetMenuItemID(ports, 0)).data(), port);
+            QCOMPARE(native.commands.value(GetMenuItemID(native.handle, 2)).data(), app.collectAction);
+        }
+        DeviceStatus connected; connected.connected = true; connected.port = "TEST-PORT";
+        app.updatePortChecks(connected);
+        NativeTrayMenu connectedMenu(app.menu.get());
+        QVERIFY(GetMenuState(GetSubMenu(connectedMenu.handle, 3), 0, MF_BYPOSITION) & MF_CHECKED);
+        QVERIFY(app.enterLightweight());
+        NativeTrayMenu lightweightMenu(app.menu.get());
+        QVERIFY(GetMenuState(lightweightMenu.handle, 6, MF_BYPOSITION) & MF_CHECKED);
+        QVERIFY(!app.window());
+        QVERIFY(!app.tray->contextMenu());
+#else
+        QSKIP("Windows native menus only");
+#endif
+    }
     void trayMenuKeepsSystemStyleAcrossPalettes() {
         TestProfile dir;
         const auto restore = qScopeGuard([&] { UiAppearance::instance().apply("system", dir.path()); });
@@ -1706,6 +1843,11 @@ private slots:
             QVERIFY(app.menu->property("nativeMenuStyle").toBool());
             QVERIFY(!app.tray->icon().isNull());
         }
+#ifdef Q_OS_WIN
+        // The visible tray popup is an HMENU, not this fallback QMenu widget.
+        QVERIFY(!app.tray->contextMenu());
+        return;
+#endif
         const auto shots = qEnvironmentVariable("TURING_UI_PALETTE_SHOTS");
         app.menu->popup(QPoint(10, 10));
         app.menu->setActiveAction(app.lightAction);

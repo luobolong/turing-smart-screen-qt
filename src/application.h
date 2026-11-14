@@ -32,9 +32,10 @@ private:
     int trayRetryCount = 0;
     std::function<bool()> trayAvailable;
     std::function<QList<Port>()> listPorts = Device::ports;
-    bool closed = false, unsaved = false;
+    bool closed = false, unsaved = false, trayMenuOpen = false;
     void makeWindow();
     void makeTray();
+    void showTrayMenu();
     void updateTrayState();
     void refreshPortMenu();
     void updatePortChecks(const DeviceStatus &state);

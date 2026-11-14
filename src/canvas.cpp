@@ -137,6 +137,13 @@ bool Canvas::canResize() const {
 void Canvas::mousePressEvent(QMouseEvent *e) {
     setFocus();
     if (e->button() == Qt::RightButton) {
+        if (!editing || !theme) return;
+        const auto id = dragTarget(logical(e->position()), e->modifiers() & Qt::AltModifier);
+        if (id.isEmpty() || !selected.contains(id)) {
+            selected = id.isEmpty() ? QStringList() : QStringList{id};
+            emit selectionChanged();
+            update();
+        }
         emit contextRequested(e->globalPosition().toPoint());
         return;
     }

@@ -108,7 +108,61 @@ public:
         painter->translate(rect.center().x() - size / 2., rect.center().y() - size / 2.);
         painter->scale(size / 24., size / 24.);
         painter->setPen(QPen(color, 1.7, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin)); painter->setBrush(Qt::NoBrush);
-        if (icon == UiIcon::Refresh) {
+        if (icon == UiIcon::Move) {
+            painter->drawLine(QPointF(3, 12), QPointF(21, 12));
+            painter->drawLine(QPointF(12, 3), QPointF(12, 21));
+            QPainterPath arrows;
+            arrows.moveTo(6, 9); arrows.lineTo(3, 12); arrows.lineTo(6, 15);
+            arrows.moveTo(18, 9); arrows.lineTo(21, 12); arrows.lineTo(18, 15);
+            arrows.moveTo(9, 6); arrows.lineTo(12, 3); arrows.lineTo(15, 6);
+            arrows.moveTo(9, 18); arrows.lineTo(12, 21); arrows.lineTo(15, 18);
+            painter->drawPath(arrows);
+        } else if (icon == UiIcon::Text) {
+            painter->drawLine(QPointF(5, 4), QPointF(19, 4));
+            painter->drawLine(QPointF(5, 4), QPointF(5, 7));
+            painter->drawLine(QPointF(19, 4), QPointF(19, 7));
+            painter->drawLine(QPointF(12, 4), QPointF(12, 21));
+            painter->drawLine(QPointF(8, 21), QPointF(16, 21));
+        } else if (icon == UiIcon::Rectangle) {
+            painter->drawRect(QRectF(4, 5, 16, 14));
+        } else if (icon == UiIcon::Ellipse) {
+            painter->drawEllipse(QRectF(3, 5, 18, 14));
+        } else if (icon == UiIcon::Line) {
+            painter->drawLine(QPointF(4, 20), QPointF(20, 4));
+        } else if (icon == UiIcon::Layers) {
+            QPainterPath layers;
+            layers.moveTo(3, 8); layers.lineTo(12, 3); layers.lineTo(21, 8); layers.lineTo(12, 13); layers.closeSubpath();
+            layers.moveTo(3, 12); layers.lineTo(12, 17); layers.lineTo(21, 12);
+            layers.moveTo(3, 16); layers.lineTo(12, 21); layers.lineTo(21, 16);
+            painter->drawPath(layers);
+        } else if (icon == UiIcon::Components) {
+            for (int x : {4, 14}) for (int y : {4, 14}) painter->drawRoundedRect(QRectF(x, y, 6, 6), 1, 1);
+        } else if (icon == UiIcon::Group) {
+            QPainterPath folder; folder.moveTo(3, 7); folder.lineTo(3, 4); folder.lineTo(10, 4);
+            folder.lineTo(13, 7); folder.lineTo(21, 7); folder.lineTo(21, 20); folder.lineTo(3, 20); folder.closeSubpath();
+            painter->drawPath(folder);
+        } else if (icon == UiIcon::Ungroup) {
+            painter->drawRect(QRectF(3, 3, 7, 7)); painter->drawRect(QRectF(14, 14, 7, 7));
+            painter->drawLine(QPointF(14, 4), QPointF(20, 4)); painter->drawLine(QPointF(20, 4), QPointF(20, 10));
+            painter->drawLine(QPointF(4, 14), QPointF(4, 20)); painter->drawLine(QPointF(4, 20), QPointF(10, 20));
+        } else if (icon == UiIcon::Copy || icon == UiIcon::Duplicate) {
+            QPainterPath back; back.moveTo(7, 16); back.lineTo(3, 16); back.lineTo(3, 3); back.lineTo(16, 3); back.lineTo(16, 7);
+            painter->drawPath(back); painter->drawRoundedRect(QRectF(8, 8, 13, 13), 1, 1);
+            if (icon == UiIcon::Duplicate) {
+                painter->drawLine(QPointF(11, 14.5), QPointF(18, 14.5));
+                painter->drawLine(QPointF(14.5, 11), QPointF(14.5, 18));
+            }
+        } else if (icon == UiIcon::Paste) {
+            painter->drawRoundedRect(QRectF(5, 5, 14, 16), 1, 1);
+            painter->setBrush(palette.color(QPalette::Window));
+            painter->drawRoundedRect(QRectF(9, 3, 6, 4), 1, 1);
+        } else if (icon == UiIcon::Delete) {
+            painter->drawLine(QPointF(3, 6), QPointF(21, 6));
+            QPainterPath bin; bin.moveTo(9, 6); bin.lineTo(9, 3); bin.lineTo(15, 3); bin.lineTo(15, 6);
+            bin.moveTo(5, 6); bin.lineTo(6, 21); bin.lineTo(18, 21); bin.lineTo(19, 6);
+            painter->drawPath(bin);
+            painter->drawLine(QPointF(10, 10), QPointF(10, 17)); painter->drawLine(QPointF(14, 10), QPointF(14, 17));
+        } else if (icon == UiIcon::Refresh) {
             painter->drawArc(QRectF(4, 4, 16, 16), 30 * 16, 295 * 16);
             QPainterPath arrow; arrow.moveTo(20, 3); arrow.lineTo(20, 9); arrow.lineTo(14, 9);
             painter->drawPath(arrow);

@@ -1,5 +1,6 @@
 #include "application.h"
 #include "uiappearance.h"
+#include "nativetraymenu.h"
 #include <QtWidgets>
 #include <algorithm>
 #if defined(__GLIBC__)
@@ -18,7 +19,7 @@ ApplicationController::ApplicationController(QString directory, const QString &t
     countdown.setSingleShot(true);
     countdown.setTimerType(Qt::PreciseTimer);
     connect(&countdown, &QTimer::timeout, this, [this] {
-        if (QApplication::activeModalWidget() || QApplication::activePopupWidget() ||
+        if (trayMenuOpen || QApplication::activeModalWidget() || QApplication::activePopupWidget() ||
             (editor && editor->startup->busy())) {
             countdown.start(1000);
             return;
@@ -27,6 +28,9 @@ ApplicationController::ApplicationController(QString directory, const QString &t
     });
     connect(tray, &QSystemTrayIcon::activated, this, [this](QSystemTrayIcon::ActivationReason reason) {
         if (reason == QSystemTrayIcon::Trigger || reason == QSystemTrayIcon::DoubleClick) showWindow();
+#ifdef Q_OS_WIN
+        if (reason == QSystemTrayIcon::Context) showTrayMenu();
+#endif
     });
     connect(runtime.get(), &DisplayRuntime::updated, this, &ApplicationController::updateTrayState);
     connect(&runtime->device, &Device::statusChanged, this, &ApplicationController::updateTrayState, Qt::QueuedConnection);
@@ -114,7 +118,9 @@ void ApplicationController::makeTray() {
         lightAction->setCheckable(true);
         menu->addSeparator();
         quitAction = menu->addAction(QString(), this, &ApplicationController::quit);
+#ifndef Q_OS_WIN
         tray->setContextMenu(menu.get());
+#endif
     }
     showAction->setText(L("显示窗口", "Show window"));
     collectAction->setText(L("采集数据", "Collect data"));
@@ -127,6 +133,17 @@ void ApplicationController::makeTray() {
     tray->setIcon(applicationIcon());
     updateTrayState();
     tray->show();
+}
+void ApplicationController::showTrayMenu() {
+    if (trayMenuOpen) return;
+    QScopedValueRollback<bool> open(trayMenuOpen, true);
+    updateTrayState();
+    refreshPortMenu();
+#ifdef Q_OS_WIN
+    NativeTrayMenu native(menu.get());
+    if (native.popup()) return;
+#endif
+    menu->popup(QCursor::pos());
 }
 void ApplicationController::updateTrayState() {
     if (!lightAction || !sendAction) return;
@@ -237,7 +254,7 @@ void ApplicationController::restoreEditor(const QJsonObject &state) {
 }
 bool ApplicationController::enterLightweight() {
     if (isLightweight()) return true;
-    if (!editor || !trayAvailable() || QApplication::activeModalWidget() || QApplication::activePopupWidget()) return false;
+    if (!editor || trayMenuOpen || !trayAvailable() || QApplication::activeModalWidget() || QApplication::activePopupWidget()) return false;
     if (editor->startup->busy()) return false;
     // Write histories and inactive drafts before releasing them from memory.
     auto file = std::make_unique<QTemporaryFile>(runtime->dataDir + "/lightweight-session-XXXXXX.json");

@@ -690,32 +690,58 @@ void MainWindow::buildLibraryPage(QWidget *w) {
     });
 }
 void MainWindow::buildEditorPage(QWidget *w) {
-    auto layout = new QVBoxLayout(w);
+    auto layout = new QHBoxLayout(w);
     layout->setContentsMargins(0, 0, 0, 0);
     auto tools = new QToolBar;
     tools->setObjectName("editorTools");
-    tools->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
-    tools->setIconSize(QSize(18, 18));
-    tools->setMinimumWidth(0);
-    auto toolBox = new QComboBox;
-    for (auto p : QList<QPair<QString, QString>>{{"move", L("移动", "Move")},
-                                                 {"text", L("文字", "Text")},
-                                                 {"rectangle", L("矩形", "Rectangle")},
-                                                 {"ellipse", L("椭圆", "Ellipse")},
-                                                 {"line", L("直线", "Line")}})
-        toolBox->addItem(p.second, p.first);
-    tools->addWidget(toolBox);
+    tools->setAccessibleName(L("编辑工具", "Editor tools"));
+    tools->setOrientation(Qt::Vertical);
+    tools->setMovable(false);
+    tools->setToolButtonStyle(Qt::ToolButtonIconOnly);
+    tools->setIconSize(QSize(22, 22));
+    tools->setFixedWidth(44);
+    auto toolGroup = new QActionGroup(tools);
+    const auto addTool = [&](const QString &kind, const QString &label, UiIcon icon) {
+        auto action = tools->addAction(uiIcon(icon), label);
+        action->setObjectName("editorTool_" + kind);
+        action->setCheckable(true);
+        action->setChecked(kind == "move");
+        toolGroup->addAction(action);
+        connect(action, &QAction::triggered, this, [this, kind] { canvas->tool = kind; canvas->setFocus(); });
+    };
+    addTool("move", L("移动工具", "Move tool"), UiIcon::Move);
+    addTool("text", L("文字工具", "Text tool"), UiIcon::Text);
+    addTool("rectangle", L("矩形工具", "Rectangle tool"), UiIcon::Rectangle);
+    addTool("ellipse", L("椭圆工具", "Ellipse tool"), UiIcon::Ellipse);
+    addTool("line", L("直线工具", "Line tool"), UiIcon::Line);
+    tools->addSeparator();
+    const auto menuButton = [&](const QString &name, const QString &label, UiIcon icon) {
+        auto button = new QToolButton;
+        button->setObjectName(name);
+        button->setText(label);
+        button->setToolTip(label);
+        button->setAccessibleName(label);
+        button->setIcon(uiIcon(icon));
+        button->setIconSize(tools->iconSize());
+        button->setPopupMode(QToolButton::InstantPopup);
+        auto menu = new QMenu(button);
+        button->setMenu(menu);
+        tools->addWidget(button);
+        return menu;
+    };
+    auto creationMenu = menuButton("editorNewLayer", L("新建图层", "New layer"), UiIcon::Layers);
+    creationMenu->setObjectName("editorNewLayerMenu");
+    populateLayerMenu(creationMenu);
+    auto componentsMenu = menuButton("editorComponents", L("添加组件", "Add component"), UiIcon::Components);
+    for (auto kind : {"CPU", "GPU", "RAM", "NET", "CLOCK", "DISK"})
+        componentsMenu->addAction(QString::fromLatin1(kind), this,
+                                  [this, kind] { addComponent(QString::fromLatin1(kind)); });
+    tools->addSeparator();
     undoAction = tools->addAction(uiIcon(UiIcon::Undo), L("撤销", "Undo"), this, &MainWindow::undo);
     redoAction = tools->addAction(uiIcon(UiIcon::Redo), L("重做", "Redo"), this, &MainWindow::redo);
     tools->addSeparator();
-    auto themeOptions = new QToolButton;
-    themeOptions->setObjectName("themeOptions");
-    themeOptions->setText(L("主题选项", "Theme options"));
-    themeOptions->setPopupMode(QToolButton::InstantPopup);
-    tools->addWidget(themeOptions);
-    auto themeMenu = new QMenu(themeOptions);
+    auto themeMenu = menuButton("themeOptions", L("主题选项", "Theme options"), UiIcon::Settings);
     themeMenu->setObjectName("themeOptionsMenu");
-    themeOptions->setMenu(themeMenu);
     themeMenu->addAction(L("重命名主题", "Rename theme"), this, [this] {
         renameLibraryItem(path);
     });
@@ -767,39 +793,10 @@ void MainWindow::buildEditorPage(QWidget *w) {
     connect(renameTheme, &QToolButton::clicked, this, [this] { renameLibraryItem(path); });
     cv->addLayout(themeHeader);
     auto layers = new QWidget;
+    layers->setObjectName("layersPanel");
     auto llayers = new QVBoxLayout(layers);
-    llayers->setContentsMargins(8, 8, 8, 8);
-    auto creation = new QHBoxLayout;
-    auto add = button(L("＋ 图层", "+ Layer"), creation, [] {});
-    auto menu = new QMenu(add);
-    for (auto pair : QList<QPair<QString, QString>>{{"text", L("文字", "Text")},
-                                                    {"sensor", L("传感器", "Sensor")},
-                                                    {"image", L("图片", "Image")},
-                                                    {"rectangle", L("矩形", "Rectangle")},
-                                                    {"ellipse", L("椭圆", "Ellipse")},
-                                                    {"line", L("直线", "Line")},
-                                                    {"bar", L("状态条", "Progress bar")},
-                                                    {"arc", L("弧形条", "Arc")},
-                                                    {"group", L("分组", "Group")}})
-        menu->addAction(pair.second, this, [this, pair] { createLayer(pair.first); });
-    add->setMenu(menu);
-    auto components = button(L("组件", "Components"), creation, [] {});
-    auto cm = new QMenu(components);
-    for (auto kind : {"CPU", "GPU", "RAM", "NET", "CLOCK", "DISK"})
-        cm->addAction(QString::fromLatin1(kind), this,
-                      [this, kind] { addComponent(QString::fromLatin1(kind)); });
-    components->setMenu(cm);
-    llayers->addLayout(creation);
-    auto layerButtons = new QHBoxLayout;
-    button(L("重命名", "Rename"), layerButtons, [this] { rename(); });
-    button(L("编组", "Group"), layerButtons, [this] { layerAction("group"); });
-    button(L("解组", "Ungroup"), layerButtons, [this] { layerAction("ungroup"); });
-    llayers->addLayout(layerButtons);
-    auto copyButtons = new QHBoxLayout;
-    button(L("复制", "Copy"), copyButtons, [this] { layerAction("copy"); });
-    button(L("粘贴", "Paste"), copyButtons, [this] { layerAction("paste"); });
-    button(L("删除", "Delete"), copyButtons, [this] { layerAction("delete"); });
-    llayers->addLayout(copyButtons);
+    llayers->setContentsMargins(0, 0, 0, 0);
+    llayers->setSpacing(0);
     auto tr = new LayerTree;
     tree = tr;
     tree->setObjectName("layerTree");
@@ -812,9 +809,47 @@ void MainWindow::buildEditorPage(QWidget *w) {
     tree->setContextMenuPolicy(Qt::CustomContextMenu);
     tree->setEditTriggers(QAbstractItemView::DoubleClicked | QAbstractItemView::EditKeyPressed);
     llayers->addWidget(tree, 1);
+    auto layerTools = new QToolBar;
+    layerTools->setObjectName("layerTools");
+    layerTools->setAccessibleName(L("图层操作", "Layer actions"));
+    layerTools->setMovable(false);
+    layerTools->setToolButtonStyle(Qt::ToolButtonIconOnly);
+    layerTools->setIconSize(QSize(18, 18));
+    layerActions.clear();
+    const auto layerCommand = [&](const QString &key, const QString &label, UiIcon icon, const QString &shortcut = {}) {
+        auto action = new QAction(uiIcon(icon), label + (shortcut.isEmpty() ? QString() : "\t" + shortcut), layers);
+        action->setObjectName("layer_" + key);
+        action->setToolTip(label + (shortcut.isEmpty() ? QString() : " (" + shortcut + ")"));
+        layerActions.insert(key, action);
+        connect(action, &QAction::triggered, this, [this, key] {
+            if (key == "rename") rename();
+            else if (key == "properties") inspectorTabs->setCurrentIndex(1);
+            else layerAction(key);
+        });
+    };
+    layerCommand("properties", L("图层属性…", "Layer properties…"), UiIcon::Settings);
+    layerCommand("rename", L("重命名图层…", "Rename layer…"), UiIcon::Edit, "F2");
+    layerCommand("duplicate", L("复制图层", "Duplicate layer"), UiIcon::Duplicate, "Ctrl+J");
+    layerCommand("delete", L("删除图层", "Delete layer"), UiIcon::Delete, "Del");
+    layerCommand("copy", L("复制", "Copy"), UiIcon::Copy, "Ctrl+C");
+    layerCommand("paste", L("粘贴", "Paste"), UiIcon::Paste, "Ctrl+V");
+    layerCommand("group", L("编组", "Group layers"), UiIcon::Group, "Ctrl+G");
+    layerCommand("ungroup", L("取消编组", "Ungroup layers"), UiIcon::Ungroup, "Ctrl+Shift+G");
+    layerCommand("front", L("置于顶层", "Bring to front"), UiIcon::Expand);
+    layerCommand("back", L("置于底层", "Send to back"), UiIcon::Collapse);
+    for (const auto key : {"rename", "copy", "paste", "group", "ungroup", "duplicate", "delete"}) {
+        layerTools->addAction(layerActions.value(key));
+        layerTools->widgetForAction(layerActions.value(key))->setAccessibleName(layerActions.value(key)->toolTip());
+    }
+    llayers->addWidget(layerTools);
     connect(tree, &QTreeWidget::itemSelectionChanged, this, &MainWindow::selectTree);
     connect(tree, &QTreeWidget::customContextMenuRequested, this,
-            [this](QPoint p) { contextMenu(tree->viewport()->mapToGlobal(p)); });
+            [this](QPoint p) {
+                const auto item = tree->itemAt(p);
+                if (!item) tree->clearSelection();
+                else if (!item->isSelected()) { tree->clearSelection(); item->setSelected(true); tree->setCurrentItem(item); }
+                contextMenu(tree->viewport()->mapToGlobal(p));
+            });
     connect(tree, &QTreeWidget::itemChanged, this, [this](QTreeWidgetItem *i, int column) {
         if (building)
             return;
@@ -855,10 +890,6 @@ void MainWindow::buildEditorPage(QWidget *w) {
     canvas->theme = &theme;
     scroll->setWidget(canvas);
     cv->addWidget(scroll, 1);
-    connect(toolBox, &QComboBox::currentIndexChanged, this, [this, toolBox] {
-        canvas->tool = toolBox->currentData().toString();
-        setEditing(true);
-    });
     auto options = new QHBoxLayout;
     auto grid = new QCheckBox(L("网格", "Grid"));
     options->addWidget(grid);
@@ -883,8 +914,6 @@ void MainWindow::buildEditorPage(QWidget *w) {
         }
         building = false;
         properties();
-        if (!canvas->selected.isEmpty())
-            inspectorTabs->setCurrentIndex(1);
     });
     connect(canvas, &Canvas::transientEdited, this, [this] {
         if (!renderTimer.isActive())
@@ -1676,7 +1705,9 @@ void MainWindow::updateResponsiveLayout() {
     libraryBrowser->setMaximumWidth(compactPreview ? QWIDGETSIZE_MAX : 380);
     devicePanel->setMaximumWidth(compactPreview ? QWIDGETSIZE_MAX : 340);
     reflow(librarySplit, compactPreview, {300, 540, 240}, {220, 260, 180});
-    reflow(editorSplit, pages->width() < 680, {720, 300}, {360, 260});
+    // Use the page width: on a rebuild the splitter has not been laid out yet.
+    // Reserve space for the vertical toolbar and its layout spacing.
+    reflow(editorSplit, pages->width() < 730, {720, 300}, {360, 260});
     resolution->setVisible((page == LibraryPage || page == EditorPage) && pages->width() >= 850);
     QTimer::singleShot(0, this, &MainWindow::thumbnails);
 }
@@ -1943,6 +1974,7 @@ void MainWindow::selectTree() {
     properties();
 }
 void MainWindow::properties() {
+    updateLayerActions();
     if (!layerName)
         return;
     bool was = building;
@@ -2308,6 +2340,7 @@ void MainWindow::layerAction(const QString &action) {
             l["y"] = p.y();
             clipboard.append(l);
         }
+        updateLayerActions();
         if (action == "copy")
             return;
     }
@@ -2407,21 +2440,53 @@ void MainWindow::layerAction(const QString &action) {
             reparent({id}, parentOf(theme.layers(), id), action == "front" ? -1 : 0);
     }
 }
+void MainWindow::populateLayerMenu(QMenu *menu) {
+    for (auto pair : QList<QPair<QString, QString>>{{"text", L("文字", "Text")},
+            {"sensor", L("传感器", "Sensor")}, {"image", L("图片", "Image")},
+            {"rectangle", L("矩形", "Rectangle")}, {"ellipse", L("椭圆", "Ellipse")},
+            {"line", L("直线", "Line")}, {"bar", L("状态条", "Progress bar")},
+            {"arc", L("弧形条", "Arc")}, {"group", L("分组", "Group")}}) {
+        auto action = menu->addAction(pair.second, this, [this, pair] { createLayer(pair.first); });
+        action->setData(pair.first);
+    }
+}
+void MainWindow::updateLayerActions() {
+    const auto ids = normalizedSelection(theme.layers(), selection());
+    bool editable = false, group = false;
+    for (const auto &id : ids) {
+        if (layerLocked(theme.layers(), id)) continue;
+        editable = true;
+        group |= findLayer(theme.layers(), id)["kind"] == "group";
+    }
+    for (auto i = layerActions.cbegin(); i != layerActions.cend(); ++i) {
+        bool enabled = editable;
+        if (i.key() == "paste") enabled = !clipboard.isEmpty();
+        else if (i.key() == "copy" || i.key() == "duplicate") enabled = !ids.isEmpty();
+        else if (i.key() == "properties") enabled = ids.size() == 1;
+        else if (i.key() == "rename") enabled = ids.size() == 1 && editable;
+        else if (i.key() == "ungroup") enabled = group;
+        i.value()->setEnabled(enabled);
+    }
+}
 void MainWindow::contextMenu(QPoint global) {
-    QMenu m;
-    auto create = m.addMenu(L("新建图层", "New layer"));
-    for (auto k : {"text", "sensor", "image", "rectangle", "ellipse", "line", "bar", "arc", "group"})
-        create->addAction(QString::fromLatin1(k), this, [this, k] { createLayer(QString::fromLatin1(k)); });
-    m.addAction(L("重命名", "Rename"), this, &MainWindow::rename);
-    for (auto p : QList<QPair<QString, QString>>{{"copy", L("复制", "Copy")},
-                                                 {"paste", L("粘贴", "Paste")},
-                                                 {"duplicate", L("复制图层", "Duplicate")},
-                                                 {"group", L("编组", "Group")},
-                                                 {"ungroup", L("取消编组", "Ungroup")},
-                                                 {"front", L("置顶", "Bring to front")},
-                                                 {"back", L("置底", "Send to back")},
-                                                 {"delete", L("删除", "Delete")}})
-        m.addAction(p.second, this, [this, p] { layerAction(p.first); });
+    updateLayerActions();
+    QMenu m(this);
+    m.setObjectName("layerContextMenu");
+    const auto add = [&](const char *key) { m.addAction(layerActions.value(key)); };
+    add("properties"); add("rename");
+    m.addSeparator();
+    add("duplicate"); add("delete");
+    m.addSeparator();
+    add("copy"); add("paste");
+    m.addSeparator();
+    add("group"); add("ungroup");
+    auto arrange = m.addMenu(L("排列", "Arrange"));
+    arrange->setObjectName("layerArrangeMenu");
+    arrange->addAction(layerActions.value("front"));
+    arrange->addAction(layerActions.value("back"));
+    arrange->setEnabled(layerActions.value("front")->isEnabled());
+    m.addSeparator();
+    populateLayerMenu(m.addMenu(L("新建图层", "New layer")));
     m.exec(global);
 }
 void MainWindow::render() {
