@@ -1,9 +1,10 @@
 #include "device.h"
+#include "framediff.h"
+#include <QtEndian>
 #include <QDir>
 #include <QElapsedTimer>
 #include <QFile>
 #include <QMutexLocker>
-#include <cstring>
 #include <stdexcept>
 #ifdef Q_OS_WIN
 #define WIN32_LEAN_AND_MEAN
@@ -56,49 +57,32 @@ QByteArray mirror(bool value) {
 QByteArray brightness(int value) {
     return header((25500 - qBound(0, value, 100) * 255) / 100, 0, 0, 0, 0x6e);
 }
-QByteArray bitmap(const QImage &source, QPoint at) {
+QImage rgb565(const QImage &source) {
     if (source.isNull() || source.width() > 480 || source.height() > 480)
         throw std::runtime_error("Invalid bitmap");
-    auto img = source.convertToFormat(QImage::Format_RGBA8888);
+    if (source.format() == QImage::Format_RGB16)
+        return source;
+    const auto rgba = source.convertToFormat(QImage::Format_RGBA8888);
+    QImage result(source.size(), QImage::Format_RGB16);
+    for (int y = 0; y < rgba.height(); ++y) {
+        const auto *p = rgba.constScanLine(y);
+        auto *out = reinterpret_cast<quint16 *>(result.scanLine(y));
+        for (int x = 0; x < rgba.width(); ++x)
+            out[x] = quint16(((p[x * 4] & 0xf8) << 8) | ((p[x * 4 + 1] & 0xfc) << 3) |
+                             (p[x * 4 + 2] >> 3));
+    }
+    return result;
+}
+QByteArray bitmap(const QImage &source, QPoint at) {
+    const auto img = rgb565(source);
     auto b = header(at.x(), at.y(), at.x() + img.width() - 1, at.y() + img.height() - 1, 0xc5);
-    b.reserve(6 + img.width() * img.height() * 2);
+    b.resize(6 + img.width() * img.height() * 2);
     for (int y = 0; y < img.height(); ++y) {
-        const uchar *p = img.constScanLine(y);
-        for (int x = 0; x < img.width(); ++x) {
-            quint16 c =
-                quint16(((p[x * 4] & 0xf8) << 8) | ((p[x * 4 + 1] & 0xfc) << 3) | (p[x * 4 + 2] >> 3));
-            b.append(char(c & 255));
-            b.append(char(c >> 8));
-        }
+        const auto *p = reinterpret_cast<const quint16 *>(img.constScanLine(y));
+        for (int x = 0; x < img.width(); ++x)
+            qToLittleEndian(p[x], b.data() + 6 + (y * img.width() + x) * 2);
     }
     return b;
-}
-QRect changed(const QImage &a, const QImage &b) {
-    if (a.size() != b.size() || a.isNull())
-        return b.rect();
-    int x0 = b.width(), y0 = b.height(), x1 = -1, y1 = -1;
-    if (a.format() == QImage::Format_RGBA8888 && b.format() == a.format()) {
-        for (int y = 0; y < b.height(); ++y) {
-            const auto *left = reinterpret_cast<const quint32 *>(a.constScanLine(y));
-            const auto *right = reinterpret_cast<const quint32 *>(b.constScanLine(y));
-            if (std::memcmp(left, right, size_t(b.width()) * 4) == 0) continue;
-            for (int x = 0; x < b.width(); ++x) {
-                if (left[x] == right[x]) continue;
-                x0 = qMin(x, x0); x1 = qMax(x, x1);
-            }
-            y0 = qMin(y, y0); y1 = y;
-        }
-        return x1 < x0 ? QRect() : QRect(QPoint(x0, y0), QPoint(x1, y1));
-    }
-    for (int y = 0; y < b.height(); ++y)
-        for (int x = 0; x < b.width(); ++x)
-            if (a.pixel(x, y) != b.pixel(x, y)) {
-                x0 = qMin(x, x0);
-                y0 = qMin(y, y0);
-                x1 = qMax(x, x1);
-                y1 = qMax(y, y1);
-            }
-    return x1 < x0 ? QRect() : QRect(QPoint(x0, y0), QPoint(x1, y1));
 }
 } // namespace Protocol
 class NativeSerial {
@@ -307,7 +291,12 @@ DeviceStatus Device::status() {
 }
 void Device::run() {
     NativeSerial serial;
-    QImage previous;
+    FrameDiff diff;
+    QImage target;
+    bool refreshPending = false;
+    QElapsedTimer clock;
+    clock.start();
+    qint64 nextSend = 0;
     bool connected = false, v2 = false;
     int direction = 2;
     for (;;) {
@@ -315,8 +304,15 @@ void Device::run() {
         QImage frame;
         {
             QMutexLocker lock(&mutex);
-            while (!stopping && queue.empty() && pending.isNull())
-                wake.wait(&mutex);
+            while (!stopping && queue.empty() && pending.isNull()) {
+                if (!refreshPending) {
+                    wake.wait(&mutex);
+                } else {
+                    const auto delay = nextSend - clock.elapsed();
+                    if (delay <= 0) break;
+                    wake.wait(&mutex, static_cast<unsigned long>(delay));
+                }
+            }
             if (stopping)
                 break;
             commands.swap(queue);
@@ -336,7 +332,9 @@ void Device::run() {
                     msleep(10);
                     serial.write(Protocol::brightness(c.light));
                     connected = true;
-                    previous = {};
+                    diff.invalidate();
+                    target = {};
+                    refreshPending = false;
                     QMutexLocker lock(&mutex);
                     state.connected = true;
                     state.connecting = false;
@@ -347,7 +345,9 @@ void Device::run() {
                 } else if (c.kind == 2) {
                     serial.close();
                     connected = false;
-                    previous = {};
+                    diff.invalidate();
+                    target = {};
+                    refreshPending = false;
                     QMutexLocker lock(&mutex);
                     state.connected = false;
                     state.connecting = false;
@@ -362,22 +362,30 @@ void Device::run() {
                         direction = c.value;
                         serial.write(Protocol::orientation(direction));
                         msleep(10);
-                        previous = {};
+                        diff.invalidate();
+                        refreshPending = !target.isNull();
                     } else if (c.kind == 5) {
                         serial.write(Protocol::mirror(c.value != 0));
                         msleep(10);
-                        previous = {};
+                        diff.invalidate();
+                        refreshPending = !target.isNull();
                     } else if (c.kind == 6) {
                         serial.write(Protocol::orientation(0));
                         msleep(10);
                         serial.write(Protocol::header(0, 0, 0, 0, 0x66));
                         serial.write(Protocol::orientation(direction));
                         msleep(10);
-                        previous = {};
+                        diff.invalidate();
+                        target = {};
+                        refreshPending = false;
+                        frame = {};
                     } else if (c.kind == 7) {
                         serial.write(Protocol::header(0, 0, 0, 0, 0x65));
                         serial.close();
                         connected = false;
+                        diff.invalidate();
+                        target = {};
+                        refreshPending = false;
                         QMutexLocker lock(&mutex);
                         state.connected = false;
                         state.port.clear();
@@ -385,33 +393,52 @@ void Device::run() {
                         emit statusChanged();
                     } else if (c.kind == 8) {
                         serial.write(Protocol::header(0, 0, 0, 0, c.value ? 0x6d : 0x6c));
-                        previous = {};
+                        diff.invalidate();
+                        target = {};
+                        refreshPending = false;
+                        frame = {};
                     }
                 }
             }
             if (connected && !frame.isNull()) {
-                auto expected = direction >= 2 ? QSize(480, 320) : QSize(320, 480);
-                if (frame.size() != expected)
-                    continue;
-                auto rect = Protocol::changed(previous, frame);
-                if (!rect.isEmpty()) {
-                    auto b = Protocol::bitmap(frame.copy(rect), rect.topLeft());
-                    serial.write(b.left(6));
-                    if (!v2)
-                        msleep(10);
-                    serial.write(b.mid(6));
-                    if (!v2)
-                        msleep(10);
+                const auto expected = direction >= 2 ? QSize(480, 320) : QSize(320, 480);
+                if (frame.size() == expected) {
+                    target = Protocol::rgb565(frame);
+                    refreshPending = true;
+                }
+            }
+            const auto expected = direction >= 2 ? QSize(480, 320) : QSize(320, 480);
+            if (connected && refreshPending && target.size() == expected && clock.elapsed() >= nextSend) {
+                const auto started = clock.elapsed();
+                const auto result = diff.send(target, started, v2, [&](const QRect &, const QByteArray &packet) {
+                    {
+                        QMutexLocker lock(&mutex);
+                        if (stopping || !queue.empty() || !pending.isNull()) return false;
+                    }
+                    serial.write(packet.left(6));
+                    if (!v2) msleep(10);
+                    serial.write(packet.mid(6));
+                    if (!v2) msleep(10);
+                    return true;
+                });
+                refreshPending = result.pending;
+                // Account for USB buffering without sleeping twice when native writes already blocked.
+                nextSend = started + (result.cost * 1000 + FrameDiff::Bandwidth - 1) / FrameDiff::Bandwidth;
+                if (result.rectangles > 0) {
                     QMutexLocker lock(&mutex);
                     ++state.frames;
-                    state.bytes += quint64(b.size());
+                    state.bytes += quint64(result.bytes);
                 }
-                previous = frame;
+            } else if (target.size() != expected) {
+                target = {};
+                refreshPending = false;
             }
         } catch (const std::exception &e) {
             serial.close();
             connected = false;
-            previous = {};
+            diff.invalidate();
+            target = {};
+            refreshPending = false;
             QMutexLocker lock(&mutex);
             state.connected = false;
             state.connecting = false;

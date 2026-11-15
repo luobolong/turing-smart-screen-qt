@@ -11,8 +11,8 @@ QByteArray header(int x, int y, int endX, int endY, quint8 command);
 QByteArray orientation(int value);
 QByteArray mirror(bool value);
 QByteArray brightness(int value);
+QImage rgb565(const QImage &image);
 QByteArray bitmap(const QImage &image, QPoint at = {});
-QRect changed(const QImage &previous, const QImage &next);
 } // namespace Protocol
 struct Port {
     QString name, description;

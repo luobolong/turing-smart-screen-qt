@@ -17,12 +17,12 @@ public:
     QByteArray received;
     std::atomic<bool> stopping{false};
     std::thread worker;
-    PseudoScreen() {
+    explicit PseudoScreen(bool v2 = true) {
         master = posix_openpt(O_RDWR | O_NOCTTY | O_NONBLOCK);
         if (master < 0 || grantpt(master) || unlockpt(master))
             throw std::runtime_error("Cannot create serial test PTY");
         port = QString::fromLocal8Bit(ptsname(master));
-        worker = std::thread([this] {
+        worker = std::thread([this, v2] {
             bool replied = false;
             while (!stopping) {
                 pollfd descriptor{master, POLLIN, 0};
@@ -35,8 +35,7 @@ public:
                 QMutexLocker lock(&mutex);
                 received.append(buffer, int(count));
                 if (!replied && received.size() >= 6) {
-                    ::write(master, "V2", 2);
-                    replied = true;
+                    replied = ::write(master, v2 ? "V2" : "V1", 2) == 2;
                 }
             }
         });

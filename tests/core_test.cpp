@@ -258,22 +258,6 @@ private slots:
             QCOMPARE(int(p & 1023), ey);
         }
     }
-    void changedRegion() {
-        QImage a(480, 320, QImage::Format_RGB32);
-        a.fill(Qt::black);
-        auto b = a;
-        QCOMPARE(Protocol::changed(a, b), QRect());
-        b.setPixelColor(12, 17, Qt::red);
-        b.setPixelColor(20, 25, Qt::white);
-        QCOMPARE(Protocol::changed(a, b), QRect(12, 17, 9, 9));
-        a = a.convertToFormat(QImage::Format_RGBA8888);
-        b = b.convertToFormat(QImage::Format_RGBA8888);
-        QCOMPARE(Protocol::changed(a, b), QRect(12, 17, 9, 9));
-        QCOMPARE(Protocol::changed(a, a), QRect());
-        b.setPixelColor(0, 0, QColor(0, 0, 0, 1));
-        b.setPixelColor(479, 319, Qt::white);
-        QCOMPARE(Protocol::changed(a, b), b.rect());
-    }
     void imageCompositingRetainsIntegerAlphaAndClipping() {
         QImage source(7, 5, QImage::Format_RGBA8888);
         const int alphas[]{64, 127, 0, 1, 254, 255, 200};
@@ -325,18 +309,37 @@ private slots:
         frame.fill(Qt::black);
         auto packet = Protocol::bitmap(frame);
         device.submit(frame);
-        QTRY_COMPARE_WITH_TIMEOUT(device.status().frames, quint64(1), 5000);
-        QTRY_COMPARE_WITH_TIMEOUT(screen.bytes().size(), initialization.size() + packet.size(), 3000);
-        QCOMPARE(screen.bytes().mid(initialization.size()), packet);
+        // Full frames now arrive as independently addressed, budgeted row slices.
+        auto initialPayload = [&] {
+            QByteArray payload;
+            auto bytes = screen.bytes().mid(initialization.size());
+            int offset = 0, y = 0;
+            while (offset + 6 <= bytes.size()) {
+                quint64 packed = 0;
+                for (int i = 0; i < 5; ++i) packed = (packed << 8) | quint8(bytes[offset + i]);
+                const int top = int((packed >> 20) & 1023), bottom = int(packed & 1023);
+                const int size = 480 * (bottom - top + 1) * 2;
+                if (offset + 6 + size > bytes.size()) break;
+                if (bytes.mid(offset, 6) != Protocol::header(0, y, 479, bottom, 0xc5) || top != y)
+                    return QByteArray();
+                payload += bytes.mid(offset + 6, size);
+                offset += 6 + size;
+                y = bottom + 1;
+            }
+            return payload;
+        };
+        QTRY_COMPARE_WITH_TIMEOUT(initialPayload(), packet.mid(6), 5000);
+        const auto initialBytes = screen.bytes().size();
+        const auto initialFrames = device.status().frames;
         frame.setPixelColor(12, 17, Qt::red);
         device.submit(frame);
-        QTRY_COMPARE_WITH_TIMEOUT(device.status().frames, quint64(2), 3000);
-        QTRY_COMPARE_WITH_TIMEOUT(screen.bytes().size(), initialization.size() + packet.size() + 8, 3000);
+        QTRY_COMPARE_WITH_TIMEOUT(device.status().frames, initialFrames + 1, 3000);
+        QTRY_COMPARE_WITH_TIMEOUT(screen.bytes().size(), initialBytes + 8, 3000);
         QCOMPARE(screen.bytes().right(8),
                  Protocol::header(12, 17, 12, 17, 0xc5) + QByteArray::fromHex("00f8"));
         device.submit(frame);
         QTest::qWait(50);
-        QCOMPARE(device.status().frames, quint64(2));
+        QCOMPARE(device.status().frames, initialFrames + 1);
         device.disconnectPort();
         QTRY_VERIFY_WITH_TIMEOUT(!device.status().connected, 3000);
 #endif
