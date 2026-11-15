@@ -8,8 +8,6 @@ try {
     cmake --build build/windows --config Release --parallel 4
     if($LASTEXITCODE -ne 0){throw 'Build failed'}
     $env:PATH="$QtRoot/bin;$env:PATH"
-    & ./build/windows/Release/screen-tests.exe -platform offscreen -o artifacts-core-test.txt,txt
-    if($LASTEXITCODE -ne 0){Get-Content artifacts-core-test.txt;throw 'Tests failed'}
     ctest --test-dir build/windows -C Release --output-on-failure
     if($LASTEXITCODE -ne 0){throw 'Tests failed'}
 } finally {Pop-Location}

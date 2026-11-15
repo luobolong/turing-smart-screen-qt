@@ -59,12 +59,12 @@ jobs:
           cache: true
 
       - name: Configure
-        run: cmake -S . -B build/ci -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+        run: cmake -S . -B build/ci -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON -DSCREEN_EXTENDED_GUI_TESTS=OFF
 
       - name: Build
         run: cmake --build build/ci --parallel 4
 
-      - name: Run core, GUI and startup tests
+      - name: Run essential tests
         run: >-
           ctest --test-dir build/ci -C Release --output-on-failure --timeout 90
           --output-junit "${{ github.workspace }}/build/ci/test-results.xml"

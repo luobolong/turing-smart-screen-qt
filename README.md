@@ -78,7 +78,7 @@ Linux:
 ./scripts/build-linux.sh
 ```
 
-The build scripts also run the tests. Nix users can run `nix build path:.`. Packaging scripts are in `scripts`; use the application's `--help` option to view its command-line options.
+The build scripts run a focused set of core and editing workflow tests by default. Add `-DSCREEN_EXTENDED_GUI_TESTS=ON` when configuring CMake to run additional GUI regressions. Nix users can run `nix build path:.`. Packaging scripts are in `scripts`; use the application's `--help` option to view its command-line options.
 
 The **Build, test and package** GitHub Actions workflow generates Windows x64 portable archives and installers on pushes and manual runs. Open a workflow run and download `turing-screen-qt-<version>-windows-x64-portable.zip` from **Artifacts**. Extract the entire archive, then run `turing-screen-qt.exe`. The portable package includes Qt, the MSVC runtime, plugins, and assets. Artifacts are retained for 30 days; pull requests only run builds and tests.
 

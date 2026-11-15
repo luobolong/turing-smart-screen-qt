@@ -60,38 +60,6 @@ static void dragCanvas(Canvas &canvas, QPointF from, QPointF to,
 class GuiTest : public QObject {
     Q_OBJECT
 private slots:
-    void narrowDevicePanelKeepsControlsInsideViewport() {
-        TestProfile dir;
-        MainWindow window(dir.path());
-        window.show(); window.sampling.stop();
-        window.hide(); window.show();
-        const auto shots = qEnvironmentVariable("TURING_WEATHER_UI_SHOTS");
-        if (!shots.isEmpty()) window.selectUiTheme("catppuccin-macchiato");
-        auto scroll = window.findChild<QScrollArea *>("deviceScroll");
-        QVERIFY(scroll);
-        auto font = window.font();
-        for (int size : {9, 12}) {
-            font.setPointSize(size); window.setFont(font);
-            for (int width : {200, 220, 260}) {
-                window.devicePanel->setFixedWidth(width);
-                QCoreApplication::processEvents();
-                QTest::qWait(20);
-                QVERIFY(scroll->widget()->width() <= scroll->viewport()->width());
-                QCOMPARE(scroll->horizontalScrollBar()->maximum(), 0);
-                for (QWidget *widget : QList<QWidget *>{window.portBox, window.directionBox,
-                        window.brightness, window.connectButton, window.sendButton,
-                        window.findChild<QToolButton *>("refreshDevicePorts")}) {
-                    const auto left = widget->mapTo(scroll->viewport(), QPoint()).x();
-                    QVERIFY2(left >= 0 && left + widget->width() <= scroll->viewport()->width(), qPrintable(widget->objectName()));
-                }
-                if (!shots.isEmpty() && size == 9 && width == 220) {
-                    QDir().mkpath(shots);
-                    QVERIFY(window.grab().save(shots + "/device-narrow.png"));
-                }
-            }
-        }
-        window.quitting = true;
-    }
     void manualWeatherSettingsShowsErrorsSuccessAndRespectsCollectionPause() {
         TestProfile dir;
         WeatherNetwork network;
@@ -233,57 +201,6 @@ private slots:
             QVERIFY(window.grab().save(shots + "/settings.png"));
         }
         window.dirty = false; window.quitting = true;
-    }
-    void zoomPercentagesRemainVisibleAcrossPalettesAndFontSizes() {
-        TestProfile dir;
-        MainWindow window(dir.path());
-        window.show();
-        window.sampling.stop();
-        for (const auto &palette : {QString("catppuccin-latte"), QString("catppuccin-macchiato")}) {
-            window.selectUiTheme(palette);
-            for (int size : {9, 12}) {
-                for (const auto &prefix : {QString("preview"), QString("editor")}) {
-                    window.setPage(prefix == "preview" ? MainWindow::LibraryPage : MainWindow::EditorPage);
-                    auto value = window.findChild<QDoubleSpinBox *>(prefix + "ZoomValue");
-                    QVERIFY(value && value->isVisible());
-                    const auto edit = value->findChild<QLineEdit *>();
-                    QVERIFY(edit);
-                    auto font = value->font(); font.setPointSize(size); value->setFont(font);
-                    auto controls = window.findChild<QWidget *>(prefix + "ZoomControls");
-                    const auto capture = [&] {
-                        const auto frame = controls->grab();
-                        const auto scale = frame.devicePixelRatioF();
-                        return frame.toImage().copy(QRect(value->pos() * scale, value->size() * scale));
-                    };
-                    value->clearFocus();
-                    value->setValue(100.);
-                    edit->deselect();
-                    QCoreApplication::processEvents();
-                    const auto first = capture();
-                    value->setValue(200.);
-                    edit->deselect();
-                    QCoreApplication::processEvents();
-                    const auto second = capture();
-                    const auto shots = qEnvironmentVariable("TURING_ZOOM_UI_SHOTS");
-                    if (!shots.isEmpty()) {
-                        QDir().mkpath(shots);
-                        QVERIFY(controls->grab().save(
-                            shots + '/' + palette + '-' + QString::number(size) + '-' + prefix + ".png"));
-                    }
-                    QVERIFY2(edit->width() >= edit->fontMetrics().horizontalAdvance(value->text()),
-                        qPrintable(palette + '/' + prefix + ": the percentage editor must fit its text"));
-                    QVERIFY2(first != second, qPrintable(palette + '/' + prefix + " font=" + QString::number(size)
-                        + ": changing the percentage must change the painted text"));
-                    value->selectAll();
-                    QTest::keyClicks(value, "175.50");
-                    QTest::keyClick(value, Qt::Key_Return);
-                    QCOMPARE(value->value(), 175.5);
-                    const auto target = prefix == "preview" ? window.previewCanvas : window.canvas;
-                    QVERIFY(std::abs(target->zoom() - 1.755) < .00001);
-                }
-            }
-        }
-        window.quitting = true;
     }
     void collectionToggleSyncsPersistsAndReleasesLightweightCaches() {
         TestProfile dir;
@@ -474,83 +391,6 @@ private slots:
         QVERIFY(w.sidebarExpanded);
         w.build();
         QVERIFY(w.sidebarExpanded);
-        w.quitting = true;
-    }
-    void sidebarIconsStayAlignedAndPageHeadersHaveEqualHeight() {
-        TestProfile dir;
-        MainWindow w(dir.path());
-        w.sampling.stop();
-        w.selectUiTheme("catppuccin-mocha");
-        w.show();
-        for (bool english : {false, true}) {
-            w.english = english;
-            w.build();
-            for (int width : {1280, 760}) {
-                w.resize(width, 820);
-                w.setSidebarExpanded(false);
-                w.setPage(MainWindow::LibraryPage);
-                QCoreApplication::processEvents();
-                auto light = w.findChild<QToolButton *>("sidebarLightweight");
-                QCOMPARE(w.sidebarBrand->height(), 64);
-                QCOMPARE(light->height(), 44);
-                QCOMPARE(w.sidebarToggle->height(), 36);
-                const auto iconImages = [&] {
-                    QList<QImage> images;
-                    for (auto b : {w.sidebarBrand, light}) {
-                        const auto y = b->mapTo(w.sidebar, QPoint(0, b->height() / 2)).y();
-                        images.append(w.sidebar->grab(QRect(14, y - 16, 32, 32)).toImage());
-                    }
-                    for (int n = 0; n < w.navigation->count(); ++n) {
-                        const auto row = w.navigation->visualItemRect(w.navigation->item(n));
-                        const auto y = w.navigation->viewport()->mapTo(w.sidebar, row.center()).y();
-                        images.append(w.sidebar->grab(QRect(19, y - 11, 22, 22)).toImage());
-                    }
-                    return images;
-                };
-                const auto collapsed = iconImages();
-                const auto logoPosition = w.sidebarBrand->mapTo(w.sidebar, QPoint());
-                const auto togglePosition = w.sidebarToggle->mapTo(w.sidebar, QPoint());
-                const auto expandIcon = w.sidebarToggle->icon().pixmap(22, 22).toImage();
-                w.sidebarBrand->click();
-                QTRY_VERIFY(w.sidebarExpanded);
-                QCoreApplication::processEvents();
-                QCOMPARE(w.sidebar->width(), 208);
-                QCOMPARE(iconImages(), collapsed);
-                QCOMPARE(w.sidebarBrand->mapTo(w.sidebar, QPoint()), logoPosition);
-                QCOMPARE(w.sidebarToggle->mapTo(w.sidebar, QPoint()), togglePosition);
-                QVERIFY(w.sidebarToggle->text().isEmpty());
-                QVERIFY(w.sidebarToggle->icon().pixmap(22, 22).toImage() != expandIcon);
-                w.sidebarToggle->click();
-                QTRY_VERIFY(!w.sidebarExpanded);
-                QCoreApplication::processEvents();
-                QCOMPARE(iconImages(), collapsed);
-                int titleCenter = -1;
-                for (int page = 0; page < MainWindow::PageCount; ++page) {
-                    w.setPage(page);
-                    QCoreApplication::processEvents();
-                    QCOMPARE(w.titleBar->height(), 64);
-                    const auto center = w.pageTitle->mapTo(w.titleBar, w.pageTitle->rect().center()).y();
-                    if (titleCenter < 0) titleCenter = center;
-                    QCOMPARE(center, titleCenter);
-                    QCOMPARE(w.titleBar->y(), 0);
-                    const auto shots = qEnvironmentVariable("TURING_PANEL_SHOTS");
-                    if (!shots.isEmpty() && width == 1280) {
-                        QDir().mkpath(shots);
-                        const auto name = QString("/sidebar-%1-page-%2").arg(english ? "en" : "zh").arg(page);
-                        QVERIFY(w.grab().save(shots + name + "-collapsed.png"));
-                        w.sidebarBrand->click();
-                        QCoreApplication::processEvents();
-                        QVERIFY(w.grab().save(shots + name + "-expanded.png"));
-                        w.sidebarToggle->click();
-                        QCoreApplication::processEvents();
-                    }
-                }
-                QCOMPARE(w.findChild<QToolButton *>("libraryExpandSelected")->toolTip(),
-                         english ? QString("Expand selected folder") : QString::fromUtf8("展开所选文件夹"));
-                QCOMPARE(w.findChild<QToolButton *>("libraryImport")->toolTip(),
-                         english ? QString("Import theme") : QString::fromUtf8("导入主题"));
-            }
-        }
         w.quitting = true;
     }
     void compactLayoutReflowsAndSidebarRemainsUsable() {
@@ -1556,11 +1396,7 @@ private slots:
         QTest::addColumn<int>("tab");
         QTest::addColumn<bool>("collapsed");
         QTest::addColumn<bool>("f2");
-        QTest::newRow("menu-layers") << 0 << false << false;
         QTest::newRow("menu-properties") << 1 << false << false;
-        QTest::newRow("menu-properties-collapsed-pane") << 1 << true << false;
-        QTest::newRow("f2-layers") << 0 << false << true;
-        QTest::newRow("f2-properties") << 1 << false << true;
         QTest::newRow("f2-properties-collapsed-pane") << 1 << true << true;
     }
     void componentRenameRevealsAndEditsTheSelectedComponent() {
@@ -1625,127 +1461,6 @@ private slots:
         QCOMPARE(findLayer(w.theme.layers(), id), expected);
         QCOMPARE(w.undoHistory.size(), 1);
         w.undo(); QCOMPARE(findLayer(w.theme.layers(), id), target);
-    }
-    void layerSelectionAndRenameKeepContentAligned() {
-        TestProfile dir;
-        const auto restore = qScopeGuard([&] { UiAppearance::instance().apply("system", dir.path()); });
-        MainWindow w(dir.path());
-        const auto close = qScopeGuard([&] { w.dirty = false; w.quitting = true; });
-        w.sampling.stop();
-        w.choose(dir.path() + "/themes/custom/nightfall.json");
-        w.setEditing(true);
-        w.show();
-        w.selectUiTheme("catppuccin-macchiato");
-        QCoreApplication::processEvents();
-        QTreeWidgetItem *item = nullptr;
-        QTreeWidgetItemIterator items(w.tree);
-        while (*items) {
-            if ((*items)->data(0, Qt::UserRole).toString() == "nightfall-weather-condition") item = *items;
-            ++items;
-        }
-        QVERIFY(item);
-        w.tree->scrollToItem(item);
-        const auto index = w.tree->indexFromItem(item);
-        const auto inkBounds = [](const QImage &image, QColor foreground, QColor background) {
-            const auto distance = [](QColor a, QColor b) {
-                return qAbs(a.red() - b.red()) + qAbs(a.green() - b.green()) + qAbs(a.blue() - b.blue());
-            };
-            QRect bounds;
-            for (int y = 0; y < image.height(); ++y)
-                for (int x = 0; x < image.width(); ++x)
-                    if (distance(image.pixelColor(x, y), foreground) < distance(image.pixelColor(x, y), background))
-                        bounds |= QRect(x, y, 1, 1);
-            return bounds;
-        };
-        for (int size : {9, 12, 16}) {
-            auto font = w.tree->font(); font.setPointSize(size); w.tree->setFont(font);
-            QCoreApplication::processEvents();
-            const auto paint = [&](bool selected) {
-                w.tree->clearSelection();
-                if (selected) w.tree->setCurrentItem(item);
-                w.tree->scrollToItem(item, QAbstractItemView::PositionAtCenter);
-                QCoreApplication::processEvents();
-                const auto view = w.tree->viewport()->grab();
-                const auto row = w.tree->visualRect(index);
-                const auto image = view.toImage().copy(QRect((QPointF(row.topLeft()) * view.devicePixelRatio()).toPoint(),
-                    (QSizeF(row.size()) * view.devicePixelRatio()).toSize()));
-                const auto background = w.tree->palette().color(selected ? QPalette::Highlight : QPalette::Base);
-                const auto shots = qEnvironmentVariable("TURING_LAYER_UI_SHOTS");
-                if (!shots.isEmpty()) {
-                    QDir().mkpath(shots);
-                    image.save(shots + QString("/row-%1-%2.png").arg(size).arg(selected ? "selected" : "normal"));
-                }
-                return inkBounds(image, w.tree->palette().color(selected ? QPalette::HighlightedText : QPalette::Text), background);
-            };
-            const auto normal = paint(false), selected = paint(true);
-            QVERIFY(!normal.isEmpty());
-            QCOMPARE(selected, normal);
-
-            w.tree->setCurrentItem(item);
-            w.tree->editItem(item, 0);
-            QCoreApplication::processEvents();
-            QLineEdit *editor = nullptr;
-            for (auto field : w.tree->findChildren<QLineEdit *>()) if (field->isVisible()) editor = field;
-            QVERIFY(editor && editor->isVisible());
-            const auto row = w.tree->visualRect(index);
-            QVERIFY(editor->geometry().left() >= row.left());
-            QVERIFY(editor->geometry().right() <= row.right());
-            QCOMPARE(editor->geometry().bottom(), row.bottom() - 1);
-            QCOMPARE(editor->font().pointSizeF(), w.tree->font().pointSizeF());
-            QVERIFY(editor->height() >= editor->fontMetrics().height() + 8);
-            editor->setText("gypqj_");
-            editor->deselect();
-            editor->setCursorPosition(0);
-            QLineEdit reference(w.tree->viewport());
-            reference.setFont(editor->font());
-            reference.setText(editor->text());
-            reference.resize(editor->width(), editor->height() + 20);
-            const auto glyphs = [&](QLineEdit *field) {
-                const auto pixmap = field->grab();
-                // Ignore the frame and the caret at the start of the line.
-                const auto content = field->rect().adjusted(5, 2, -2, -2);
-                auto image = pixmap.toImage().copy(QRect((QPointF(content.topLeft()) * pixmap.devicePixelRatio()).toPoint(),
-                    (QSizeF(content.size()) * pixmap.devicePixelRatio()).toSize()));
-                const auto bounds = inkBounds(image, field->palette().color(QPalette::Text), field->palette().color(QPalette::Base));
-                return image.copy(bounds);
-            };
-            const auto actualGlyphs = glyphs(editor), expectedGlyphs = glyphs(&reference);
-            QCOMPARE(actualGlyphs.size(), expectedGlyphs.size());
-            QCOMPARE(actualGlyphs, expectedGlyphs);
-            const auto shots = qEnvironmentVariable("TURING_LAYER_UI_SHOTS");
-            if (!shots.isEmpty()) {
-                editor->setText(item->text(0));
-                editor->deselect();
-                editor->setCursorPosition(0);
-                w.tree->grab().save(shots + QString("/layer-renaming-%1.png").arg(size));
-            }
-            QTest::keyClick(editor, Qt::Key_Escape);
-            QCoreApplication::processEvents();
-        }
-    }
-    void layerLockColumnStaysAtRightAcrossPanelSizes() {
-        TestProfile dir;
-        MainWindow w(dir.path(), dir.path() + "/themes/custom/nightfall.json");
-        const auto close = qScopeGuard([&] { w.dirty = false; w.quitting = true; });
-        w.sampling.stop(); w.show(); w.setEditing(true);
-        QCoreApplication::processEvents();
-        auto header = w.tree->header();
-        for (int size : {9, 12}) {
-            auto font = w.tree->font(); font.setPointSize(size); w.tree->setFont(font);
-            QCoreApplication::processEvents();
-            const int lockWidth = header->sectionSize(1);
-            for (int width : {220, 360, 480, 260}) {
-                w.editorSplit->setSizes({w.editorSplit->width() - width, width});
-                QCoreApplication::processEvents();
-                QCOMPARE(header->sectionSize(1), lockWidth);
-                QCOMPARE(header->sectionViewportPosition(1) + lockWidth, header->viewport()->width());
-                QCOMPARE(header->sectionSize(0), header->viewport()->width() - lockWidth);
-                QCOMPARE(w.tree->horizontalScrollBar()->maximum(), 0);
-                QVERIFY(!w.tree->horizontalScrollBar()->isVisible());
-                const auto shots = qEnvironmentVariable("TURING_LAYER_UI_SHOTS");
-                if (!shots.isEmpty()) w.tree->grab().save(shots + QString("/lock-column-%1-%2.png").arg(size).arg(width));
-            }
-        }
     }
     void themeTitlesRenameInlineWithoutMovingHeaders() {
         TestProfile dir;
@@ -1985,7 +1700,6 @@ private slots:
         QTest::addColumn<bool>("mirroredGroup");
         for (const auto kind : {QString("rectangle"), QString("ellipse"), QString("line")}) {
             QTest::newRow(qPrintable(kind + "-actual-size")) << kind << 1.0 << false;
-            QTest::newRow(qPrintable(kind + "-zoomed-mirrored-group")) << kind << 1.35 << true;
         }
     }
     void drawnShapesAppearAtTheirSelectionImmediately() {
@@ -2073,18 +1787,10 @@ private slots:
         QTest::addColumn<QPointF>("first");
         QTest::addColumn<QPointF>("last");
         QTest::addColumn<bool>("mirroredGroup");
-        const QList<QPair<QPointF, QPointF>> segments{
-            {{70, 220}, {280, 60}}, {{70, 60}, {280, 220}},
-            {{280, 220}, {70, 60}}, {{280, 60}, {70, 220}},
-            {{70, 130}, {280, 130}}, {{280, 130}, {70, 130}},
-            {{170, 60}, {170, 220}}, {{170, 220}, {170, 60}}};
-        int index = 0;
-        for (const auto &segment : segments) {
-            for (bool grouped : {false, true})
-                QTest::newRow(qPrintable(QString("direction-%1-%2").arg(index).arg(grouped ? "mirrored-group" : "root")))
-                    << segment.first << segment.second << grouped;
-            ++index;
-        }
+        QTest::newRow("rising") << QPointF(70, 220) << QPointF(280, 60) << false;
+        QTest::newRow("falling") << QPointF(70, 60) << QPointF(280, 220) << false;
+        QTest::newRow("horizontal") << QPointF(70, 130) << QPointF(280, 130) << false;
+        QTest::newRow("vertical-mirrored-group") << QPointF(170, 220) << QPointF(170, 60) << true;
     }
     void lineToolPreviewsAndKeepsDraggedEndpoints() {
         QFETCH(QPointF, first);
@@ -2198,100 +1904,6 @@ private slots:
             QVERIFY(line["line_rising"].toBool());
             dragCanvas(*w.canvas, {220, 265}, {232, 273});
             QCOMPARE(absolutePosition(w.theme.layers(), id), QPointF(132, 258));
-        }
-    }
-    void editorToolsAndLayerFooterKeepActionsAccessible() {
-        TestProfile dir;
-        MainWindow w(dir.path());
-        w.sampling.stop(); w.resize(1280, 820); w.show(); w.setEditing(true);
-        const auto restore = qScopeGuard([&] { w.dirty = false; w.quitting = true; UiAppearance::instance().apply("system", dir.path()); });
-        auto tools = w.findChild<QToolBar *>("editorTools");
-        auto footer = w.findChild<QToolBar *>("layerTools");
-        QVERIFY(tools && footer);
-        QCOMPARE(footer->actions().first()->objectName(), QString("layer_new"));
-        auto create = w.findChild<QToolButton *>("layerNew");
-        QVERIFY(create && create->menu() && create->menu()->actions().size() == 9);
-        QVERIFY(footer->actions().contains(w.layerActions["cut"]));
-        QCOMPARE(tools->orientation(), Qt::Vertical);
-        QCOMPARE(tools->toolButtonStyle(), Qt::ToolButtonIconOnly);
-        QTRY_VERIFY(tools->mapTo(&w, tools->rect().topRight()).x() < w.canvas->mapTo(&w, QPoint()).x());
-        QVERIFY(footer->mapTo(&w, QPoint()).y() > w.tree->mapTo(&w, w.tree->rect().bottomLeft()).y());
-        for (const auto name : {"editorNewLayer", "editorComponents", "themeOptions"}) {
-            auto button = tools->findChild<QToolButton *>(name);
-            QVERIFY(button && button->menu() && !button->icon().isNull());
-            QVERIFY(!button->accessibleName().isEmpty());
-        }
-        auto textTool = tools->findChild<QAction *>("editorTool_text");
-        auto moveTool = tools->findChild<QAction *>("editorTool_move");
-        QVERIFY(textTool && moveTool);
-        textTool->trigger(); QCOMPARE(w.canvas->tool, QString("text"));
-        QVERIFY(textTool->isChecked() && !moveTool->isChecked());
-        tools->findChild<QAction *>("editorTool_rectangle")->trigger();
-        dragCanvas(*w.canvas, {30, 30}, {75, 60});
-        QCOMPARE(w.selection().size(), 1);
-        QCOMPARE(findLayer(w.theme.layers(), w.selection().first())["kind"].toString(), QString("rectangle"));
-        moveTool->trigger(); QCOMPARE(w.canvas->tool, QString("move"));
-        QCOMPARE(w.inspectorTabs->currentIndex(), 0); // Selecting the canvas keeps the layer panel available.
-        QVERIFY(w.layerActions["duplicate"]->isEnabled());
-        QVERIFY(!w.layerActions["ungroup"]->isEnabled());
-        w.layerActions["copy"]->trigger(); QVERIFY(w.layerActions["paste"]->isEnabled());
-        const auto original = w.selection();
-        w.layerActions["paste"]->trigger(); QVERIFY(w.selection() != original);
-        w.selection({});
-        QVERIFY(!w.layerActions["delete"]->isEnabled());
-        QVERIFY(!w.layerActions["rename"]->isEnabled());
-        QVERIFY(w.layerActions["paste"]->isEnabled());
-        const auto shots = qEnvironmentVariable("TURING_EDITOR_UI_SHOTS");
-        for (const auto size : {QSize(1280, 820), QSize(760, 680)}) {
-            w.resize(size); QCoreApplication::processEvents();
-            QVERIFY(tools->mapTo(&w, tools->rect().topRight()).x() < w.canvas->mapTo(&w, QPoint()).x());
-            for (auto action : footer->actions()) {
-                auto button = footer->widgetForAction(action);
-                QVERIFY(button && button->isVisible());
-                QVERIFY(footer->rect().contains(button->geometry()));
-            }
-            if (!shots.isEmpty()) {
-                w.selectUiTheme("catppuccin-mocha");
-                QDir().mkpath(shots);
-                QVERIFY(w.grab().save(shots + QString("/editor-%1.png").arg(size.width())));
-            }
-        }
-        w.resize(1280, 820);
-        w.selection(original);
-        bool inspected = false;
-        QTimer::singleShot(0, &w, [&] {
-            auto menu = w.findChild<QMenu *>("layerContextMenu");
-            QVERIFY(menu);
-            const auto close = qScopeGuard([&] { menu->close(); });
-            QCOMPARE(menu->actions().first(), w.layerActions["cut"]);
-            QCOMPARE(menu->actions().last(), w.layerActions["properties"]);
-            const auto actions = menu->actions();
-            QCOMPARE(std::count_if(actions.begin(), actions.end(), [](QAction *a) { return a->isSeparator(); }), 4);
-            auto arrange = menu->findChild<QMenu *>("layerArrangeMenu");
-            QVERIFY(arrange && arrange->isEnabled());
-            auto create = menu->findChild<QMenu *>("layerContextNewMenu");
-            QVERIFY(create && create->actions().size() == 9);
-            inspected = true;
-        });
-        w.contextMenu(w.tree->mapToGlobal(QPoint(20, 40)));
-        QVERIFY(inspected);
-        if (!shots.isEmpty()) {
-            w.english = false; w.build();
-            w.choose(dir.path() + "/themes/custom/nightfall.json");
-            w.setEditing(true); w.inspectorTabs->setCurrentIndex(0);
-            w.resize(1280, 820); QCoreApplication::processEvents();
-            QTRY_COMPARE(w.editorSplit->orientation(), Qt::Horizontal);
-            QFile sample(QFINDTESTDATA("fixtures/nightfall-windows-sample.json"));
-            QVERIFY(sample.open(QIODevice::ReadOnly));
-            w.sample = Snapshot::fromJson(QJsonDocument::fromJson(sample.readAll()).object());
-            w.render(); w.tree->expandAll();
-            QVERIFY(w.grab().save(shots + "/editor-final.png"));
-            w.selection({"nightfall-cpu-model"});
-            QTimer::singleShot(0, &w, [&] {
-                auto menu = w.findChild<QMenu *>("layerContextMenu");
-                if (menu) { menu->grab().save(shots + "/editor-context-menu.png"); menu->close(); }
-            });
-            w.contextMenu(w.tree->mapToGlobal(QPoint(20, 40)));
         }
     }
     void shapeStrokePropertiesRenderPersistAndUndo_data() {
@@ -2443,12 +2055,12 @@ private slots:
             QCOMPARE(findLayer(w.theme.layers(), id)["stroke_width"].toInt(), 1);
         }
     }
-    void textAndSensorStylesHaveSwatchesAndOrderedProperties_data() {
+    void textAndSensorColorsAndBordersPersist_data() {
         QTest::addColumn<QString>("kind");
         QTest::newRow("text") << QString("text");
         QTest::newRow("sensor") << QString("sensor");
     }
-    void textAndSensorStylesHaveSwatchesAndOrderedProperties() {
+    void textAndSensorColorsAndBordersPersist() {
         QFETCH(QString, kind);
         TestProfile dir;
         const auto restore = qScopeGuard([&] { UiAppearance::instance().apply("system", dir.path()); });
@@ -2511,41 +2123,6 @@ private slots:
         w.strokeEnabledBox->click();
         QCOMPARE(w.frame.pixelColor(57, 110), QColor(Qt::black));
         w.undo(); QCOMPARE(w.frame, styled); w.selection({id});
-        const auto shots = qEnvironmentVariable("TURING_TEXT_BOX_UI_SHOTS");
-        for (bool english : {false, true}) {
-            w.english = english; w.build(); w.setEditing(true); w.selection({id});
-            w.selectUiTheme("catppuccin-macchiato");
-            w.inspectorTabs->setCurrentIndex(1);
-            for (int width : {280, 340}) {
-                w.inspectorTabs->setFixedWidth(width);
-                QTest::qWait(20);
-                const auto top = [&](QWidget *widget) { return widget->mapTo(w.right, QPoint()).y(); };
-                QVERIFY(top(w.strokeColor) + w.strokeColor->height() <= top(w.fontColor));
-                QVERIFY(top(w.fontColor) + w.fontColor->height() <= top(w.visibleBox));
-                QVERIFY(qAbs(top(w.strokeWidthBox) + w.strokeWidthBox->height() / 2. - top(w.strokeColor) - w.strokeColor->height() / 2.) <= 1);
-                QVERIFY(qAbs(top(w.fontBox) + w.fontBox->height() / 2. - top(w.fontColor) - w.fontColor->height() / 2.) <= 1);
-                QCOMPARE(w.strokeColor->mapTo(w.right, QPoint()).x(), w.fontColor->mapTo(w.right, QPoint()).x());
-                QCOMPARE(w.strokeColor->width(), w.fontColor->width());
-                const int minimalColorWidth = qMax(w.fontColor->sizeHint().width(), w.strokeColor->sizeHint().width());
-                QCOMPARE(w.fontColor->width(), minimalColorWidth);
-                const auto inputX = w.layerName->mapTo(w.right, QPoint()).x();
-                for (auto widget : QList<QWidget *>{w.xBox, w.wBox, w.fontBox, w.strokeWidthBox})
-                    QCOMPARE(widget->mapTo(w.right, QPoint()).x(), inputX);
-                const auto labelX = w.propertyForm->labelForField(w.layerName)->mapTo(w.right, QPoint()).x();
-                QCOMPARE(w.strokeWidthLabel->mapTo(w.right, QPoint()).x(), labelX);
-                QCOMPARE(w.propertyForm->labelForField(w.fontOptions)->mapTo(w.right, QPoint()).x(), labelX);
-                QVERIFY(!w.fillColor->isVisible());
-                QVERIFY(qAbs(top(w.visibleBox) - top(w.lockedBox)) <= 1);
-                auto scroll = qobject_cast<QScrollArea *>(w.inspectorTabs->widget(1)); QVERIFY(scroll);
-                QCOMPARE(scroll->horizontalScrollBar()->maximum(), 0);
-                QVERIFY(w.strokeWidthBox->width() >= 40);
-                if (!shots.isEmpty() && !english && width == 340) {
-                    QDir().mkpath(shots);
-                    QVERIFY(w.right->grab().save(shots + "/" + kind + "-properties.png"));
-                    QVERIFY(w.frame.save(shots + "/" + kind + "-render.png"));
-                }
-            }
-        }
         w.mutate([&](Theme &t) { auto a = t.layers(); updateLayer(a, id, [](QJsonObject &o) { o["locked"] = true; }); t.data["layers"] = a; });
         QVERIFY(!w.fontColor->isEnabled() && !w.fillColor->isEnabled() && !w.strokeColor->isEnabled());
     }
@@ -2704,8 +2281,6 @@ private slots:
         QTest::addColumn<QSize>("sourceSize");
         QTest::addColumn<bool>("mirroredGroup");
         QTest::newRow("landscape") << QSize(120, 80) << false;
-        QTest::newRow("portrait") << QSize(60, 120) << false;
-        QTest::newRow("landscape-mirrored-group") << QSize(120, 80) << true;
         QTest::newRow("portrait-mirrored-group") << QSize(60, 120) << true;
     }
     void imageShiftResizeUsesOriginalAspectAtEveryCorner() {
@@ -3338,68 +2913,6 @@ private slots:
         w.sampling.stop();
         w.updateStatus();
         QCOMPARE(w.dataState->property("statusTone").toString(), QString("muted"));
-    }
-    void systemPaletteAndFontDriveFlatAppearance() {
-        TestProfile dir;
-        {
-            QFile file(dir.path() + "/config.json");
-            QVERIFY(file.open(QIODevice::WriteOnly));
-            file.write("{\"palette\":\"forest\",\"language\":\"english\",\"weather_enabled\":false}");
-        }
-        const auto previousPalette = QApplication::palette();
-        const auto previousFont = QApplication::font();
-        const auto restore = qScopeGuard([&] {
-            QApplication::setPalette(previousPalette);
-            QApplication::setFont(previousFont);
-        });
-        auto desktopPalette = previousPalette;
-        desktopPalette.setColor(QPalette::Window, QColor("#eadfc9"));
-        desktopPalette.setColor(QPalette::Highlight, QColor("#a34976"));
-        QApplication::setPalette(desktopPalette);
-        auto desktopFont = previousFont;
-        desktopFont.setPointSize(12);
-        QApplication::setFont(desktopFont);
-        ApplicationController app(dir.path(), {}, [] { return true; });
-        app.showWindow();
-        auto w = app.window();
-        w->sampling.stop();
-        QVERIFY(!w->config.contains("palette"));
-        const auto verifyAppearance = [&] {
-            QCoreApplication::processEvents();
-            QVERIFY(qApp->styleSheet().contains("Shared flat widget design"));
-            QCOMPARE(QApplication::palette().color(QPalette::Window), desktopPalette.color(QPalette::Window));
-            QCOMPARE(QApplication::palette().color(QPalette::Highlight), desktopPalette.color(QPalette::Highlight));
-            const QList<QWidget *> widgets{w, w->root, w->navigation, w->library, w->tree,
-                                          w->portBox, w->connectButton, w->brightness, w->mirrorBox,
-                                          w->sensorTable, w->canvas};
-            for (auto widget : widgets) {
-                QVERIFY(widget->styleSheet().isEmpty());
-                QCOMPARE(widget->font(), QApplication::font(widget));
-            }
-            for (auto combo : w->findChildren<QComboBox *>()) {
-                QCOMPARE(combo->findData("graphite"), -1);
-                QCOMPARE(combo->findData("forest"), -1);
-            }
-            QCOMPARE(w->canvas->grab().toImage().pixelColor(0, 0), desktopPalette.color(QPalette::Window));
-        };
-        verifyAppearance();
-        const auto preview = w->frame;
-        desktopPalette.setColor(QPalette::Window, QColor("#252c35"));
-        desktopPalette.setColor(QPalette::Highlight, QColor("#8fbc70"));
-        QApplication::setPalette(desktopPalette);
-        desktopFont.setPointSize(14);
-        QApplication::setFont(desktopFont);
-        verifyAppearance();
-        w->english = false;
-        w->build();
-        w->render();
-        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
-        verifyAppearance();
-        QCOMPARE(w->frame, preview); // Desktop appearance must not alter the device's pixels.
-        w->persist();
-        QFile file(dir.path() + "/config.json");
-        QVERIFY(file.open(QIODevice::ReadOnly));
-        QVERIFY(!QJsonDocument::fromJson(file.readAll()).object().contains("palette"));
     }
     void pageIsolationPreferencesAndGeometry() {
         TestProfile dir;

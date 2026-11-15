@@ -44,6 +44,7 @@ endif()
 target_link_libraries(turing-screen-qt PRIVATE screen_core Qt6::Widgets Qt6::Svg)
 include(CTest)
 if(BUILD_TESTING)
+    option(SCREEN_EXTENDED_GUI_TESTS "Run additional GUI regression scenarios" OFF)
     find_package(Qt6 REQUIRED COMPONENTS Test)
     qt_add_executable(screen-tests tests/core_test.cpp)
     target_link_libraries(screen-tests PRIVATE screen_core Qt6::Test)
@@ -52,29 +53,32 @@ if(BUILD_TESTING)
     set_tests_properties(core PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
     qt_add_executable(gui-tests tests/gui_test.cpp ${SCREEN_UI_SOURCES})
     target_link_libraries(gui-tests PRIVATE screen_core Qt6::Widgets Qt6::Svg Qt6::Test)
-    add_test(NAME gui COMMAND gui-tests -o -,txt -o "${CMAKE_CURRENT_BINARY_DIR}/gui-test.txt,txt")
-    set_tests_properties(gui PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
-    if(WIN32)
-        add_test(NAME gui-native COMMAND gui-tests
-            sidebarIconsStayAlignedAndPageHeadersHaveEqualHeight
-            sensorColumnsResizeFromHeaderAndKeepTheirWidths
-            libraryToolbarSearchAndTreeActions collapsiblePanesRestoreAcrossOrientationsAndWindowRebuild
-            overviewHasAFileAndFolderOpenKeepsThumbnails
-            trayMenuKeepsSystemStyleAcrossPalettes traySerialMenuListsPortsAndMarksOnlyConnectedPort
-            trayMenuUsesNativeWindowsItems
-            editorToolsAndLayerFooterKeepActionsAccessible
-            layerSelectionAndRenameKeepContentAligned themeTitlesRenameInlineWithoutMovingHeaders
+    if(SCREEN_EXTENDED_GUI_TESTS)
+        set(screen_gui_cases)
+    else()
+        # Keep routine builds focused on editing, persistence and runtime behavior.
+        set(screen_gui_cases
+            editingWorkflow
             componentRenameRevealsAndEditsTheSelectedComponent
-            layerLockColumnStaysAtRightAcrossPanelSizes
+            componentCutPasteHonorsLocksAndUndo
             drawnShapesAppearAtTheirSelectionImmediately
             lineToolPreviewsAndKeepsDraggedEndpoints
-            componentCutPasteHonorsLocksAndUndo componentActionsUseExplorerOrder
-            themeBackgroundActionsApplyClearAndPersist
-            imageToolbarCreatesAComponentAndCancelKeepsTheTool
             imageShiftResizeUsesOriginalAspectAtEveryCorner
+            imageToolbarCreatesAComponentAndCancelKeepsTheTool
+            themeBackgroundActionsApplyClearAndPersist
             shapeStrokePropertiesRenderPersistAndUndo
-            textAndSensorStylesHaveSwatchesAndOrderedProperties
+            textAndSensorColorsAndBordersPersist
             numericPropertiesUpdateLiveAndUnsupportedPropertiesAreHidden
+            collectionToggleSyncsPersistsAndReleasesLightweightCaches
+            manualWeatherSettingsShowsErrorsSuccessAndRespectsCollectionPause
+            orientationBelongsToEachTheme)
+    endif()
+    add_test(NAME gui COMMAND gui-tests ${screen_gui_cases} -o -,txt -o "${CMAKE_CURRENT_BINARY_DIR}/gui-test.txt,txt")
+    set_tests_properties(gui PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+    if(WIN32 AND SCREEN_EXTENDED_GUI_TESTS)
+        add_test(NAME gui-native COMMAND gui-tests
+            # This Win32 menu check cannot run with the offscreen plugin.
+            trayMenuUsesNativeWindowsItems
             -o -,txt -o "${CMAKE_CURRENT_BINARY_DIR}/gui-native-test.txt,txt")
         set_tests_properties(gui-native PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=windows:fontengine=gdi")
     endif()

@@ -78,7 +78,7 @@ Linux：
 ./scripts/build-linux.sh
 ```
 
-构建脚本会同时运行测试。Nix 用户也可运行 `nix build path:.`。打包脚本位于 `scripts`，命令行参数可用 `--help` 查看。
+构建脚本默认运行核心逻辑和主要编辑流程的精简测试。需要额外 GUI 回归时，在 CMake 配置中加上 `-DSCREEN_EXTENDED_GUI_TESTS=ON`。Nix 用户也可运行 `nix build path:.`。打包脚本位于 `scripts`，命令行参数可用 `--help` 查看。
 
 GitHub Actions 的 `Build, test and package` 工作流会在 push 或手动运行时生成 Windows x64 便携包和安装包。打开工作流运行页面，在 **Artifacts** 中下载 `turing-screen-qt-<版本号>-windows-x64-portable.zip`，完整解压后运行 `turing-screen-qt.exe`。便携包包含 Qt、MSVC 运行库、插件和资源文件，产物保留 30 天；Pull Request 只执行构建与测试。
 
