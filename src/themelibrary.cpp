@@ -28,13 +28,21 @@ bool inside(const QString &path, const QString &directory) {
     }
     return !QFileInfo(directory).isSymLink();
 }
+void makeWritable(const QString &file) {
+    const auto permissions = QFile::permissions(file);
+    if (!permissions.testFlag(QFile::WriteOwner))
+        require(QFile::setPermissions(file, permissions | QFile::WriteOwner), "Cannot make theme writable: " + file);
+}
 void copyTree(const QString &source, const QString &target) {
     require(!QFileInfo(source).isSymLink(), "Symbolic links are not supported in the theme library.");
     if (QFileInfo(source).isDir()) {
         require(QDir().mkpath(target), "Cannot create folder: " + target);
         for (const auto &entry : QDir(source).entryInfoList(QDir::AllEntries | QDir::Hidden | QDir::NoDotAndDotDot))
             copyTree(entry.absoluteFilePath(), target + '/' + entry.fileName());
-    } else require(QFile::copy(source, target), "Cannot copy file: " + source);
+    } else {
+        require(QFile::copy(source, target), "Cannot copy file: " + source);
+        makeWritable(target);
+    }
 }
 void verifyTree(const QString &source) {
     require(!QFileInfo(source).isSymLink(), "Symbolic links are not supported in the theme library.");
@@ -87,7 +95,8 @@ QString ThemeLibrary::resolve(const QString &path, const QString &dataDir) const
 QString ThemeLibrary::defaultThemeFile() const {
     const auto personal = root + "/custom/system overview.json";
     if (!QFileInfo::exists(personal)) {
-        if (!QFile::copy(assets() + "/themes/custom/system overview.json", personal)) Theme::starter().save(personal);
+        if (QFile::copy(assets() + "/themes/custom/system overview.json", personal)) makeWritable(personal);
+        else Theme::starter().save(personal);
     }
     return personal;
 }
@@ -158,6 +167,15 @@ void ThemeLibrary::initialize(const QString &dataDir, QJsonObject &config) {
         require(moveItem(oldOverview, target), "Cannot migrate theme: " + oldOverview);
         importedPaths[oldOverview] = target;
         if (config["selected_theme"].toString() == oldOverview) config["selected_theme"] = target;
+    }
+    // QFile::copy preserves read-only package permissions (for example from the Nix store).
+    // Repair existing personal copies without replacing any edited theme contents.
+    if (root != absolute(source)) {
+        QDirIterator bundled(source + "/custom", {"*.json", "*.data"}, QDir::Files | QDir::NoSymLinks, QDirIterator::Subdirectories);
+        while (bundled.hasNext()) {
+            const auto target = root + "/custom/" + QDir(source + "/custom").relativeFilePath(bundled.next());
+            if (contains(target) && QFileInfo(target).isFile()) makeWritable(target);
+        }
     }
     if (config["theme_folder"].toString() == "official/config" && !QDir(root + "/official/config").exists())
         config["theme_folder"] = "official";

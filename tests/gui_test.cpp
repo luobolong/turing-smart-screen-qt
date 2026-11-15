@@ -1242,6 +1242,42 @@ private slots:
         QVERIFY(!checkbox->isChecked());
         w.quitting = true;
     }
+    void saveShortcutUpdatesReadOnlyBundledTheme_data() {
+        QTest::addColumn<QString>("filename");
+        QTest::newRow("nightfall") << QString("nightfall.json");
+        QTest::newRow("system-overview") << QString("system overview.json");
+    }
+    void saveShortcutUpdatesReadOnlyBundledTheme() {
+        QFETCH(QString, filename);
+        TestProfile dir;
+        const auto file = dir.path() + "/themes/custom/" + filename;
+        QVERIFY(QFile::setPermissions(file, QFile::ReadOwner | QFile::ReadUser | QFile::ReadGroup | QFile::ReadOther));
+        MainWindow w(dir.path(), file);
+        w.show(); w.hide(); w.show(); w.activateWindow();
+        w.sampling.stop(); w.setEditing(true);
+        w.canvas->setFocus();
+        QTest::qWait(80);
+        w.addComponent("CPU");
+        QVERIFY(w.dirty);
+        const auto expected = w.theme.data;
+        QString saveError;
+        QTimer dismissError;
+        connect(&dismissError, &QTimer::timeout, &w, [&] {
+            if (auto box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget())) {
+                saveError = box->text();
+                box->accept();
+            }
+        });
+        dismissError.start(10);
+        QTest::keyClick(w.canvas, Qt::Key_S, Qt::ControlModifier);
+        QTRY_VERIFY_WITH_TIMEOUT(!w.dirty || !saveError.isEmpty(), 1000);
+        QVERIFY2(saveError.isEmpty(), qPrintable(saveError));
+        QVERIFY(!w.dirty);
+        QCOMPARE(w.path, file);
+        QCOMPARE(w.saved, expected);
+        QCOMPARE(Theme::load(file).data, expected);
+        w.quitting = true;
+    }
     void editingWorkflow() {
         TestProfile dir;
         MainWindow w(dir.path());

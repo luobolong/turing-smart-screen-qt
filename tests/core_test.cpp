@@ -15,6 +15,7 @@
 #include <QNetworkReply>
 #include <QRawFont>
 #include <QFontDatabase>
+#include <QScopeGuard>
 #include <QtTest>
 #include <random>
 #ifndef Q_OS_WIN
@@ -433,6 +434,55 @@ private slots:
         QVERIFY(!QFileInfo::exists(old));
         library.initialize(profile.path(), config);
         QCOMPARE(config["selected_theme"].toString(), root + "/custom/system overview (2).json");
+    }
+    void readOnlyBundledThemesAreCopiedAsWritable() {
+        QTemporaryDir bundled, profile;
+        QVERIFY(QDir().mkpath(bundled.path() + "/themes/custom"));
+        const auto source = bundled.path() + "/themes/custom/system overview.json";
+        Theme::starter().save(source);
+        const auto readOnly = QFile::ReadOwner | QFile::ReadUser | QFile::ReadGroup | QFile::ReadOther;
+        QVERIFY(QFile::setPermissions(source, readOnly));
+        const auto previousAssets = qgetenv("TURING_QT_ASSETS");
+        const auto restoreAssets = qScopeGuard([&] {
+            if (previousAssets.isNull()) qunsetenv("TURING_QT_ASSETS");
+            else qputenv("TURING_QT_ASSETS", previousAssets);
+        });
+        qputenv("TURING_QT_ASSETS", bundled.path().toUtf8());
+        ThemeLibrary library;
+        QJsonObject config{{"theme_library_root", profile.path() + "/themes"}};
+        library.initialize(profile.path(), config);
+        const auto personal = library.defaultThemeFile();
+        QVERIFY(QFileInfo(personal).permissions().testFlag(QFile::WriteOwner));
+        auto edited = Theme::load(personal);
+        edited.data["name"] = "My overview";
+        edited.save(personal);
+        QCOMPARE(Theme::load(personal).data, edited.data);
+        QVERIFY(!QFileInfo(source).permissions().testFlag(QFile::WriteOwner));
+        // Older installations already contain copies with the package's permissions.
+        QVERIFY(QFile::setPermissions(personal, readOnly));
+        library.initialize(profile.path(), config);
+        QVERIFY(QFileInfo(personal).permissions().testFlag(QFile::WriteOwner));
+        QCOMPARE(Theme::load(personal).data, edited.data);
+        // Recreating the default theme uses a separate copy path.
+        QVERIFY(QFile::remove(personal));
+        QCOMPARE(library.defaultThemeFile(), personal);
+        QVERIFY(QFileInfo(personal).permissions().testFlag(QFile::WriteOwner));
+    }
+    void themeFileErrorsIncludeTheOperationAndPath() {
+        QTemporaryDir dir;
+        const auto missing = dir.path() + "/missing/theme.json";
+        const auto checkFailure = [&](const std::function<void()> &operation, const QString &verb) {
+            try {
+                operation();
+                QFAIL("The file operation should fail");
+            } catch (const std::exception &e) {
+                const auto error = QString::fromUtf8(e.what());
+                QVERIFY2(error.contains(verb) && error.contains(missing), qPrintable(error));
+                QVERIFY2(!error.contains("Unknown error", Qt::CaseInsensitive), qPrintable(error));
+            }
+        };
+        checkFailure([&] { Theme::starter().save(missing); }, "save");
+        checkFailure([&] { Theme::load(missing); }, "open");
     }
     void jsonMigration() {
         Theme t = Theme::starter();

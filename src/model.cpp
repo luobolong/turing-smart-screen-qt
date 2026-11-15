@@ -193,13 +193,19 @@ void Theme::validate() const {
 void Theme::save(const QString &path) const {
     validate();
     QSaveFile f(path);
-    check(f.open(QIODevice::WriteOnly), f.errorString());
-    check(f.write(QJsonDocument(data).toJson()) >= 0, f.errorString());
-    check(f.commit(), f.errorString());
+    // Read errorString only after the operation; function arguments may be evaluated in either order.
+    const bool opened = f.open(QIODevice::WriteOnly);
+    check(opened, "Cannot save theme: " + path + '\n' + f.errorString());
+    const auto bytes = QJsonDocument(data).toJson();
+    const auto written = f.write(bytes);
+    check(written == bytes.size(), "Cannot write theme: " + path + '\n' + f.errorString());
+    const bool committed = f.commit();
+    check(committed, "Cannot commit theme: " + path + '\n' + f.errorString());
 }
 Theme Theme::load(const QString &path) {
     QFile f(path);
-    check(f.open(QIODevice::ReadOnly), f.errorString());
+    const bool opened = f.open(QIODevice::ReadOnly);
+    check(opened, "Cannot open theme: " + path + '\n' + f.errorString());
     check(f.size() <= 32 * 1024 * 1024, "Theme file exceeds 32 MiB");
     auto bytes = f.readAll();
     if (path.endsWith(".data", Qt::CaseInsensitive))
