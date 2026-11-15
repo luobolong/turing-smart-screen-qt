@@ -33,6 +33,7 @@ public:
                        const QString &procRoot = QStringLiteral("/proc"), QNetworkAccessManager *weatherNetwork = nullptr);
     // nullptr requests the complete diagnostic sensor set; an empty set does no I/O.
     Snapshot collect(const QString &disk = {}, const QSet<QString> *requested = nullptr);
+    void setLanguage(const QString &language, Snapshot *sample = nullptr);
     void setWeather(bool enabled, const QString &city = {});
     bool refreshWeather();
     WeatherStatus weatherStatus() const;
@@ -45,7 +46,7 @@ private:
     QString sysfsRoot, procRoot;
     QNetworkAccessManager *weatherNetwork = nullptr;
     MemoryInfo memoryInfo;
-    bool memoryInfoReady = false, audioEnabled = true, networkReady = false;
+    bool memoryInfoReady = false, audioEnabled = true, networkReady = false, englishWeekday = true;
     QString cpuModel;
     Snapshot localIp;
     QElapsedTimer localIpAge;

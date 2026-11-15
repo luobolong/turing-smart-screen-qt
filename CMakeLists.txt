@@ -58,6 +58,7 @@ if(BUILD_TESTING)
     else()
         # Keep routine builds focused on editing, persistence and runtime behavior.
         set(screen_gui_cases
+            weekdayUpdatesWhenApplicationLanguageChanges
             saveShortcutUpdatesReadOnlyBundledTheme
             editingWorkflow
             componentRenameRevealsAndEditsTheSelectedComponent

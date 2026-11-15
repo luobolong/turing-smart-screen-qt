@@ -71,6 +71,7 @@ int main(int argc, char **argv) {
             QFile configFile(dir + "/config.json");
             QJsonObject config;
             if (configFile.open(QIODevice::ReadOnly)) config = QJsonDocument::fromJson(configFile.readAll()).object();
+            collector.setLanguage(config.value("language").toString("auto"));
             const auto source = parser.isSet("windows-sensor-source") ? parser.value("windows-sensor-source") : config["windows_sensor_source"].toString("system");
             if (Screen::windowsSensorSource(source) != source) throw std::runtime_error("Unknown Windows sensor source");
             bool portOk = true, gpuOk = true;

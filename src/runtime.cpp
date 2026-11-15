@@ -120,6 +120,7 @@ bool DisplayRuntime::requestWeather() {
     return collector.refreshWeather();
 }
 void DisplayRuntime::configureSensors() {
+    collector.setLanguage(config.value("language").toString("auto"), &sample);
     const auto requested = requestedMetrics();
     bool hardware = false;
     for (const auto &metric : requested)

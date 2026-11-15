@@ -1521,6 +1521,7 @@ void MainWindow::buildSettings(QWidget *w) {
     form->setHorizontalSpacing(16);
     form->addRow(collectionToggle("collectData"));
     auto language = new QComboBox;
+    language->setObjectName("applicationLanguage");
     language->addItem("自动 / System", "auto");
     language->addItem("简体中文", "chinese");
     language->addItem("English", "english");
@@ -1530,6 +1531,7 @@ void MainWindow::buildSettings(QWidget *w) {
         config["language"] = language->currentData().toString();
         english = language->currentData() == "english" ||
                   (language->currentData() == "auto" && QLocale::system().language() != QLocale::Chinese);
+        runtime->configureSensors();
         persist();
         QTimer::singleShot(0, this, [this] {
             build();

@@ -56,6 +56,8 @@ Install the monitoring software separately and keep it running. Available metric
 
 On Linux, the app reads CPU, disk, and AMD GPU metrics directly from system drivers. NVIDIA and Intel GPU collection is not yet implemented. Volume collection requires PulseAudio or PipeWire-Pulse.
 
+Linux `RamSpec` falls back to memory properties already stored by udev when raw SMBIOS access is restricted. No additional collector service is needed.
+
 ## Files and backups
 
 Portable installations usually store themes in `assets/themes`: `official` contains official themes, `custom` contains your own themes, and `deleted` is the trash folder. If that directory is not writable, the app uses the user data directory instead.

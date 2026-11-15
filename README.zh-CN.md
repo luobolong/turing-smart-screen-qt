@@ -56,6 +56,8 @@ Windows 的温度、实时 CPU 频率和 GPU 数据需要第三方监控软件�
 
 Linux 直接读取系统驱动提供的 CPU、磁盘和 AMD GPU 指标；NVIDIA / Intel GPU 采集暂未实现。音量采集需要 PulseAudio 或 PipeWire-Pulse。
 
+Linux 的 `RamSpec` 优先读取 SMBIOS，权限不足时读取 udev 已保存的内存规格，无需额外服务。
+
 ## 文件与备份
 
 便携版主题通常保存在 `assets/themes`：`official` 为官方主题，`custom` 为个人主题，`deleted` 为回收站。目录不可写时，程序会使用用户数据目录。

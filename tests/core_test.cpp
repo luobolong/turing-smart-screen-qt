@@ -698,6 +698,69 @@ private slots:
         QFont font(latinFontFamily()); font.setPixelSize(spec["font"].toObject()["size"].toInt());
         QVERIFY(QFontMetricsF(font).horizontalAdvance("DDR5/6200MHz") <= spec["w"].toDouble());
     }
+    void udevMemoryUsesConfiguredSpeedAndRejectsIncompleteModules() {
+        const QByteArray module = "E:MEMORY_DEVICE_1_TYPE=DDR5\nE:MEMORY_DEVICE_1_CONFIGURED_SPEED_MTS=6200\n"
+                                  "E:MEMORY_DEVICE_1_SPEED_MTS=7200\n";
+        const auto database = QByteArray("I:12345\nE:MEMORY_ARRAY_NUM_DEVICES=2\nE:MEMORY_DEVICE_0_PRESENT=0\n") + module;
+        QCOMPARE(parseUdevMemoryInfo(database).specification, QString("DDR5/6200MHz"));
+        for (const auto &type : {"DDR4", "LPDDR5", "DDR2 FB-DIMM"}) {
+            auto typed = database;
+            typed.replace("TYPE=DDR5", QByteArray("TYPE=") + type);
+            QCOMPARE(parseUdevMemoryInfo(typed).specification, QString::fromLatin1(type) + "/6200MHz");
+        }
+        for (const auto &invalid : {QByteArray(), database + "E:MEMORY_ARRAY_NUM_DEVICES=4097\n",
+             database + "E:MEMORY_DEVICE_1_CONFIGURED_SPEED_MTS=0\n",
+             database + "E:MEMORY_DEVICE_1_CONFIGURED_SPEED_MTS=65535\n",
+             database + "E:MEMORY_DEVICE_1_CONFIGURED_SPEED_MTS=4294967295\n",
+             database + "E:MEMORY_DEVICE_1_TYPE=Unknown\n",
+             database + "E:MEMORY_ARRAY_NUM_DEVICES=3\n",
+             database + QByteArray(1024 * 1024, ' '),
+             QByteArray("E:MEMORY_ARRAY_NUM_DEVICES=1\nE:MEMORY_DEVICE_0_PRESENT=0\n")}) {
+            const auto result = parseUdevMemoryInfo(invalid);
+            QVERIFY(result.specification.isEmpty());
+            QVERIFY(!result.error.isEmpty());
+        }
+        auto ratedOnly = database;
+        ratedOnly.replace("E:MEMORY_DEVICE_1_CONFIGURED_SPEED_MTS=6200\n", "");
+        QVERIFY(parseUdevMemoryInfo(ratedOnly).specification.isEmpty());
+        auto mixed = database;
+        mixed.replace("MEMORY_DEVICE_0_PRESENT=0", "MEMORY_DEVICE_0_TYPE=DDR4\nE:MEMORY_DEVICE_0_CONFIGURED_SPEED_MTS=3200");
+        QVERIFY(parseUdevMemoryInfo(mixed).error.contains("different"));
+        mixed.replace("TYPE=DDR4", "TYPE=DDR5");
+        QVERIFY(parseUdevMemoryInfo(mixed).error.contains("different"));
+    }
+#ifdef Q_OS_LINUX
+    void memoryInfoFallsBackToExistingUdevDatabase() {
+        QTemporaryDir sysfs;
+        const auto database = sysfs.path() + "/udev-dmi";
+        QVERIFY(currentMemoryInfo(sysfs.path(), database).specification.isEmpty());
+        QVERIFY(writeSensorFile(database, "E:MEMORY_ARRAY_NUM_DEVICES=1\nE:MEMORY_DEVICE_0_TYPE=DDR5\n"
+                                          "E:MEMORY_DEVICE_0_CONFIGURED_SPEED_MTS=6200\n"));
+        QCOMPARE(currentMemoryInfo(sysfs.path(), database).specification, QString("DDR5/6200MHz"));
+        QVERIFY(currentMemoryInfo(sysfs.path()).specification.isEmpty()); // No access to the host's udev data.
+    }
+#endif
+    void weekdayFollowsSelectedLanguage() {
+        Collector collector;
+        const QSet<QString> requested{"Weekday", "DateWeekday"};
+        for (const auto &language : {"english", "chinese", "auto"}) {
+            collector.setLanguage(language);
+            const auto sample = collector.collect({}, &requested);
+            const auto date = QDateTime::fromString(sample.timestamp, Qt::ISODateWithMs).date();
+            const bool english = QByteArray(language) == "english" ||
+                (QByteArray(language) == "auto" && QLocale::system().language() != QLocale::Chinese);
+            const auto locale = QLocale(english ? QLocale::English : QLocale::Chinese);
+            QCOMPARE(sample.text("Weekday"), locale.dayName(date.dayOfWeek(), QLocale::LongFormat));
+            QCOMPARE(sample.text("DateWeekday"), date.toString("yyyy/MM/dd") + "  " +
+                QLocale(QLocale::English).dayName(date.dayOfWeek(), QLocale::ShortFormat));
+        }
+        Snapshot paused;
+        paused.timestamp = "2026-11-15T12:00:00.000";
+        paused.strings["Weekday"] = QString::fromUtf8("星期日");
+        collector.setLanguage("english", &paused);
+        QCOMPARE(paused.text("Weekday"), QString("Sunday"));
+        QCOMPARE(paused.timestamp, QString("2026-11-15T12:00:00.000"));
+    }
     void systemIdentityFormatting_data() {
         QTest::addColumn<QString>("product");
         QTest::addColumn<QString>("version");

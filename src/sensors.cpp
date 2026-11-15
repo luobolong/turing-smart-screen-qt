@@ -121,6 +121,16 @@ double Snapshot::percentage(const QString &metric) const {
 Collector::Collector(const QString &sysfsRoot, const QString &procRoot, QNetworkAccessManager *weatherNetwork)
     : sysfsRoot(sysfsRoot), procRoot(procRoot), weatherNetwork(weatherNetwork) {
     elapsed.start();
+    setLanguage("auto");
+}
+void Collector::setLanguage(const QString &language, Snapshot *sample) {
+    englishWeekday = language == "english" || (language == "auto" && QLocale::system().language() != QLocale::Chinese);
+    // Reformat a retained sample without resuming paused data collection.
+    if (sample && sample->strings.contains("Weekday")) {
+        const auto date = QDateTime::fromString(sample->timestamp, Qt::ISODateWithMs).date();
+        if (date.isValid()) sample->strings["Weekday"] = QLocale(englishWeekday ? QLocale::English : QLocale::Chinese)
+                                                           .dayName(date.dayOfWeek(), QLocale::LongFormat);
+    }
 }
 void Collector::setWeather(bool enabled, const QString &city) {
     if (!enabled) {
@@ -469,10 +479,8 @@ Snapshot Collector::collect(const QString &disk, const QSet<QString> *requested)
     }
     for (const auto &key : {"OsName", "KernelVersion", "OsIcon"})
         s.sources[key] = QSysInfo::kernelType() == "winnt" ? "Windows system API / CurrentVersion" : "System API";
-    s.strings["Weekday"] = QStringList{QStringLiteral("星期一"), QStringLiteral("星期二"),
-                                     QStringLiteral("星期三"), QStringLiteral("星期四"),
-                                     QStringLiteral("星期五"), QStringLiteral("星期六"),
-                                     QStringLiteral("星期日")}.at(now.date().dayOfWeek() - 1);
+    s.strings["Weekday"] = QLocale(englishWeekday ? QLocale::English : QLocale::Chinese)
+                              .dayName(now.date().dayOfWeek(), QLocale::LongFormat);
     if (wants("LocalIp")) {
         if (!localIpAge.isValid() || localIpAge.elapsed() >= 30000) {
             localIp = {};

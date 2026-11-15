@@ -2950,6 +2950,29 @@ private slots:
         w.updateStatus();
         QCOMPARE(w.dataState->property("statusTone").toString(), QString("muted"));
     }
+    void weekdayUpdatesWhenApplicationLanguageChanges() {
+        TestProfile dir;
+        MainWindow w(dir.path());
+        w.show(); w.sampling.stop();
+        w.setPage(MainWindow::SensorsPage);
+        w.runtime->setCollectionEnabled(false);
+        const auto timestamp = w.sample.timestamp;
+        for (const auto &language : {QString("chinese"), QString("english")}) {
+            auto box = w.findChild<QComboBox *>("applicationLanguage");
+            QVERIFY(box);
+            box->setCurrentIndex(box->findData(language));
+            const auto locale = QLocale(language == "english" ? QLocale::English : QLocale::Chinese);
+            QTRY_COMPARE(w.sample.text("Weekday"), locale.dayName(QDate::currentDate().dayOfWeek(), QLocale::LongFormat));
+            int row = -1;
+            const auto all = metrics();
+            for (int n = 0; n < all.size(); ++n) if (all[n].first == "Weekday") row = n;
+            QVERIFY(row >= 0);
+            QTRY_COMPARE(w.sensorTable->item(row, 1)->text(), w.sample.text("Weekday"));
+            QCOMPARE(w.sample.timestamp, timestamp);
+            QVERIFY(!w.runtime->collectionEnabled());
+        }
+        w.quitting = true;
+    }
     void pageIsolationPreferencesAndGeometry() {
         TestProfile dir;
         {
