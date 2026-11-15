@@ -182,11 +182,11 @@ private slots:
         QCOMPARE(Theme::load(renamed).data, expected);
         const auto copy = library.transfer(renamed, child, true);
         QVERIFY(copy != renamed); QCOMPARE(Theme::load(copy).data, expected);
-        QVERIFY_EXCEPTION_THROWN(library.transfer(folder, child, false), std::runtime_error);
-        QVERIFY_EXCEPTION_THROWN(library.createFolder(folder, "../outside"), std::runtime_error);
-        QVERIFY_EXCEPTION_THROWN(library.purge(library.root + "/official"), std::runtime_error);
+        QVERIFY_THROWS_EXCEPTION(std::runtime_error, library.transfer(folder, child, false));
+        QVERIFY_THROWS_EXCEPTION(std::runtime_error, library.createFolder(folder, "../outside"));
+        QVERIFY_THROWS_EXCEPTION(std::runtime_error, library.purge(library.root + "/official"));
         const auto external = outside.path() + "/keep.json"; theme.save(external);
-        QVERIFY_EXCEPTION_THROWN(library.purge(external), std::runtime_error);
+        QVERIFY_THROWS_EXCEPTION(std::runtime_error, library.purge(external));
         QVERIFY(QFileInfo::exists(external));
         const auto official = library.root + "/official/original.data";
         QVERIFY(QFile::copy(assets() + "/themes/official/微星.data", official));

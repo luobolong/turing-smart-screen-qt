@@ -2177,10 +2177,10 @@ private slots:
         auto text = newLayer("text", "Sample");
         const auto textId = text["id"].toString();
         w.theme.data["layers"] = QJsonArray{text}; w.render(); w.selection({textId});
-        const auto small = w.frame;
+        const auto frameBeforeFontResize = w.frame;
         w.fontBox->setFocus(); w.fontBox->setValue(36);
         QCOMPARE(findLayer(w.theme.layers(), textId)["font"].toObject()["size"].toInt(), 36);
-        QVERIFY(w.frame != small && w.fontBox->hasFocus());
+        QVERIFY(w.frame != frameBeforeFontResize && w.fontBox->hasFocus());
         auto line = newLayer("line", "Line");
         setLayerLine(line, QLineF(80, 100, 240, 100));
         const auto lineId = line["id"].toString();

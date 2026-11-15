@@ -66,10 +66,10 @@ QRectF Canvas::bounds(const QString &id) const {
 QLineF Canvas::screenLine(const QString &id) const {
     auto line = layerLine(findLayer(theme->layers(), id)).translated(absolutePosition(theme->layers(), id));
     const auto screen = screenRect();
-    const double scale = screen.width() / theme->size().width();
+    const double viewScale = screen.width() / theme->size().width();
     const auto point = [&](QPointF p) {
         if (mirrored) p.setX(theme->size().width() - p.x());
-        return screen.topLeft() + p * scale;
+        return screen.topLeft() + p * viewScale;
     };
     return QLineF(point(line.p1()), point(line.p2()));
 }
@@ -303,10 +303,10 @@ void Canvas::mouseMoveEvent(QMouseEvent *e) {
                 double height = qMax(1., selectionBox.height() + (bottom ? delta.y() : -delta.y()));
                 if ((e->modifiers() & Qt::ShiftModifier) && imageOriginalSize.isValid()) {
                     const bool horizontal = qAbs(delta.x()) / selectionBox.width() >= qAbs(delta.y()) / selectionBox.height();
-                    double scale = horizontal ? width / imageOriginalSize.width() : height / imageOriginalSize.height();
-                    scale = qMin(scale, qMin(1536. / imageOriginalSize.width(), 1536. / imageOriginalSize.height()));
-                    width = imageOriginalSize.width() * scale;
-                    height = imageOriginalSize.height() * scale;
+                    double imageScale = horizontal ? width / imageOriginalSize.width() : height / imageOriginalSize.height();
+                    imageScale = qMin(imageScale, qMin(1536. / imageOriginalSize.width(), 1536. / imageOriginalSize.height()));
+                    width = imageOriginalSize.width() * imageScale;
+                    height = imageOriginalSize.height() * imageScale;
                 }
                 const int w = qBound(1, qRound(width), 1536), h = qBound(1, qRound(height), 1536);
                 const auto original = findLayer(before["layers"].toArray(), selected.first());
