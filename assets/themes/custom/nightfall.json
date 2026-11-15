@@ -12,7 +12,7 @@
         {
             "children": [
                 {
-                    "align": "right",
+                    "align": "center",
                     "clip": true,
                     "elide": false,
                     "fit": true,
@@ -41,7 +41,7 @@
                     "valign": "bottom",
                     "visible": true,
                     "w": 48,
-                    "x": 8,
+                    "x": 0,
                     "y": 2
                 },
                 {

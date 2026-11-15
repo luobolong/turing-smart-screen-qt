@@ -21,6 +21,18 @@ namespace Screen {
 namespace {
 constexpr int sidebarIconCenter = 22;
 constexpr int pageHeaderHeight = 64;
+QIcon colorSwatch(QColor value, const QPalette &palette) {
+    QPixmap swatch(20, 16);
+    QPainter painter(&swatch);
+    for (int y = 0; y < swatch.height(); y += 4)
+        for (int x = 0; x < swatch.width(); x += 4)
+            painter.fillRect(x, y, 4, 4, ((x + y) / 4) % 2 ? QColor("#aaaaaa") : QColor("#eeeeee"));
+    painter.fillRect(swatch.rect(), value);
+    painter.setPen(palette.color(QPalette::Text));
+    painter.drawRect(swatch.rect().adjusted(0, 0, -1, -1));
+    painter.end();
+    return QIcon(swatch);
+}
 // Keep the icon column fixed while only the space for labels changes.
 class SidebarButton : public QToolButton {
     const int rowHeight;
@@ -70,6 +82,79 @@ public:
                             item.state & QStyle::State_Selected ? QPalette::HighlightedText : QPalette::Text);
         painter->restore();
     }
+};
+class InlineThemeTitle : public QLabel {
+    QLineEdit *editor = new QLineEdit(this);
+    std::function<bool(const QString &, QString &)> apply;
+    bool finishing = false;
+    void positionEditor() {
+        const int inset = indent() >= 0 ? indent()
+            : frameWidth() > 0 ? qMax(0, fontMetrics().horizontalAdvance('x') / 2 - margin()) : 0;
+        // QLineEdit reserves two pixels on each side even without a frame.
+        editor->setGeometry(contentsRect().adjusted(margin() + inset - 2, margin(), 2 - margin(), -margin()));
+    }
+    void finishEditing() {
+        if (!editor->isVisible() || finishing) return;
+        const auto name = editor->text().trimmed();
+        if (name.isEmpty()) { cancelEditing(); return; }
+        finishing = true;
+        QString error;
+        const bool accepted = apply(name, error);
+        if (accepted) cancelEditing();
+        else {
+            editor->setToolTip(error);
+            QToolTip::showText(editor->mapToGlobal(editor->rect().bottomLeft()), error, editor);
+            editor->setFocus();
+            editor->selectAll();
+        }
+        finishing = false;
+    }
+    void cancelEditing() {
+        editor->hide();
+        apply = {};
+    }
+public:
+    InlineThemeTitle() {
+        setProperty("uiRole", "heading");
+        setMinimumWidth(0);
+        setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred);
+        editor->setProperty("inlineThemeTitle", true);
+        editor->setFrame(false);
+        editor->hide();
+        editor->installEventFilter(this);
+        connect(editor, &QLineEdit::returnPressed, this, [this] { finishEditing(); });
+    }
+    ~InlineThemeTitle() override {
+        editor->blockSignals(true);
+        editor->removeEventFilter(this);
+        editor->hide();
+    }
+    void startEditing(const QString &name, std::function<bool(const QString &, QString &)> commit) {
+        apply = std::move(commit);
+        editor->setObjectName(objectName() + "Editor");
+        editor->setFont(font());
+        editor->setText(name);
+        editor->setToolTip({});
+        positionEditor();
+        editor->show();
+        editor->setFocus(Qt::OtherFocusReason);
+        editor->selectAll();
+    }
+protected:
+    bool eventFilter(QObject *object, QEvent *event) override {
+        if (object == editor && event->type() == QEvent::FocusOut) {
+            // Defer until focus settles; teardown can also send FocusOut.
+            QTimer::singleShot(0, this, [this] { if (!editor->hasFocus()) finishEditing(); });
+        }
+        if (object == editor && event->type() == QEvent::KeyPress &&
+            static_cast<QKeyEvent *>(event)->key() == Qt::Key_Escape) {
+            cancelEditing();
+            return true;
+        }
+        return QLabel::eventFilter(object, event);
+    }
+    void resizeEvent(QResizeEvent *event) override { QLabel::resizeEvent(event); positionEditor(); }
+    void hideEvent(QHideEvent *event) override { cancelEditing(); QLabel::hideEvent(event); }
 };
 }
 class StatusLabel : public QLabel {
@@ -152,6 +237,23 @@ static bool storeConfig(const QString &directory, const QJsonObject &config, QSt
     }
     return true;
 }
+class LayerNameDelegate : public QStyledItemDelegate {
+public:
+    using QStyledItemDelegate::QStyledItemDelegate;
+    void updateEditorGeometry(QWidget *editor, const QStyleOptionViewItem &option,
+                              const QModelIndex &index) const override {
+        auto item = option;
+        initStyleOption(&item, index);
+        editor->setFont(item.font);
+        QStyledItemDelegate::updateEditorGeometry(editor, option, index);
+        auto rect = editor->geometry();
+        // The styled text rectangle excludes the row's vertical padding. An
+        // editor needs its full height, even when that extends above the row.
+        rect.setHeight(qMax(editor->sizeHint().height(), item.fontMetrics.height() + 8));
+        rect.moveBottom(option.rect.bottom() - 1);
+        editor->setGeometry(rect);
+    }
+};
 class LayerTree : public QTreeWidget {
 public:
     std::function<void(QStringList, QString, int)> dropped;
@@ -161,8 +263,16 @@ public:
         setDropIndicatorShown(true);
         setDragDropMode(QAbstractItemView::DragDrop);
     }
+    void updateLockColumnWidth() {
+        if (columnCount() > 1) header()->resizeSection(1, qMax(44, header()->sectionSizeHint(1)));
+    }
 
 protected:
+    void changeEvent(QEvent *event) override {
+        QTreeWidget::changeEvent(event);
+        if (event->type() == QEvent::FontChange || event->type() == QEvent::StyleChange)
+            updateLockColumnWidth();
+    }
     void dropEvent(QDropEvent *e) override {
         auto target = itemAt(e->position().toPoint());
         QString parent;
@@ -295,6 +405,9 @@ void MainWindow::resizeEvent(QResizeEvent *event) {
     updateResponsiveLayout();
 }
 bool MainWindow::eventFilter(QObject *watched, QEvent *event) {
+    if ((watched == fontColor || watched == strokeColor) &&
+        (event->type() == QEvent::StyleChange || event->type() == QEvent::FontChange))
+        QTimer::singleShot(0, this, &MainWindow::alignPropertyColors);
     if ((watched == pages || (library && watched == library->viewport())) && event->type() == QEvent::Resize)
         QTimer::singleShot(0, this, &MainWindow::updateResponsiveLayout);
     if (sensorTable && ((watched == sensorTable->viewport() && event->type() == QEvent::Resize) ||
@@ -627,18 +740,7 @@ void MainWindow::buildLibraryPage(QWidget *w) {
     auto previewLayout = new QVBoxLayout(preview);
     previewLayout->setContentsMargins(12, 0, 0, 0);
     auto themeHeader = new QHBoxLayout;
-    title = heading({}, themeHeader);
-    title->setObjectName("previewThemeTitle");
-    title->setMinimumWidth(0);
-    title->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred);
-    auto renameTheme = new QToolButton;
-    renameTheme->setObjectName("renamePreviewTheme");
-    renameTheme->setIcon(uiIcon(UiIcon::Edit));
-    renameTheme->setToolTip(L("重命名主题", "Rename theme"));
-    renameTheme->setAccessibleName(renameTheme->toolTip());
-    themeHeader->addWidget(renameTheme);
-    themeHeader->addStretch();
-    connect(renameTheme, &QToolButton::clicked, this, [this] { renameLibraryItem(path); });
+    title = themeHeading(themeHeader, "previewThemeTitle", "renamePreviewTheme");
     previewLayout->addLayout(themeHeader);
     previewCanvas = new Canvas;
     previewCanvas->setObjectName("previewCanvas");
@@ -711,6 +813,15 @@ void MainWindow::buildEditorPage(QWidget *w) {
     };
     addTool("move", L("移动工具", "Move tool"), UiIcon::Move);
     addTool("text", L("文字工具", "Text tool"), UiIcon::Text);
+    auto addImage = tools->addAction(uiIcon(UiIcon::Image), L("图片", "Image"));
+    addImage->setObjectName("editorTool_image");
+    addImage->setToolTip(L("添加图片组件", "Add image component"));
+    tools->widgetForAction(addImage)->setAccessibleName(addImage->toolTip());
+    connect(addImage, &QAction::triggered, this, [this, tools] {
+        const auto before = theme.data;
+        createLayer("image");
+        if (theme.data != before) tools->findChild<QAction *>("editorTool_move")->trigger();
+    });
     addTool("rectangle", L("矩形工具", "Rectangle tool"), UiIcon::Rectangle);
     addTool("ellipse", L("椭圆工具", "Ellipse tool"), UiIcon::Ellipse);
     addTool("line", L("直线工具", "Line tool"), UiIcon::Line);
@@ -729,7 +840,7 @@ void MainWindow::buildEditorPage(QWidget *w) {
         tools->addWidget(button);
         return menu;
     };
-    auto creationMenu = menuButton("editorNewLayer", L("新建图层", "New layer"), UiIcon::Layers);
+    auto creationMenu = menuButton("editorNewLayer", L("新建", "New"), UiIcon::Add);
     creationMenu->setObjectName("editorNewLayerMenu");
     populateLayerMenu(creationMenu);
     auto componentsMenu = menuButton("editorComponents", L("添加组件", "Add component"), UiIcon::Components);
@@ -745,6 +856,20 @@ void MainWindow::buildEditorPage(QWidget *w) {
     themeMenu->addAction(L("重命名主题", "Rename theme"), this, [this] {
         renameLibraryItem(path);
     });
+    themeMenu->addSeparator();
+    auto setBackground = themeMenu->addAction(L("设置背景图…", "Set background image…"), this, &MainWindow::backgroundImage);
+    setBackground->setObjectName("setThemeBackground");
+    setBackground->setToolTip(L("设置整张主题画布的背景图。", "Set a background image for the entire theme canvas."));
+    auto clearBackground = themeMenu->addAction(L("清除背景图", "Clear background image"), this, [this] {
+        mutate([](Theme &theme) { theme.data.remove("background"); });
+    });
+    clearBackground->setObjectName("clearThemeBackground");
+    auto exportPng = themeMenu->addAction(L("导出 PNG", "Export PNG"), this, &MainWindow::exportImage);
+    exportPng->setObjectName("exportThemePng");
+    connect(themeMenu, &QMenu::aboutToShow, this, [this, clearBackground] {
+        clearBackground->setEnabled(!theme.data["background"].toString().isEmpty());
+    });
+    themeMenu->addSeparator();
     auto themeType = themeMenu->addMenu(L("主题类型", "Theme type"));
     themeType->setObjectName("themeTypeMenu");
     auto typeGroup = new QActionGroup(themeType);
@@ -779,18 +904,7 @@ void MainWindow::buildEditorPage(QWidget *w) {
     auto cv = new QVBoxLayout(center);
     cv->setContentsMargins(0, 0, 0, 0);
     auto themeHeader = new QHBoxLayout;
-    editorThemeTitle = heading({}, themeHeader);
-    editorThemeTitle->setObjectName("editorThemeTitle");
-    editorThemeTitle->setMinimumWidth(0);
-    editorThemeTitle->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred);
-    auto renameTheme = new QToolButton;
-    renameTheme->setObjectName("renameEditorTheme");
-    renameTheme->setIcon(uiIcon(UiIcon::Edit));
-    renameTheme->setToolTip(L("重命名主题", "Rename theme"));
-    renameTheme->setAccessibleName(renameTheme->toolTip());
-    themeHeader->addWidget(renameTheme);
-    themeHeader->addStretch();
-    connect(renameTheme, &QToolButton::clicked, this, [this] { renameLibraryItem(path); });
+    editorThemeTitle = themeHeading(themeHeader, "editorThemeTitle", "renameEditorTheme");
     cv->addLayout(themeHeader);
     auto layers = new QWidget;
     layers->setObjectName("layersPanel");
@@ -802,8 +916,13 @@ void MainWindow::buildEditorPage(QWidget *w) {
     tree->setObjectName("layerTree");
     tr->dropped = [this](QStringList ids, QString parent, int index) { reparent(ids, parent, index); };
     tree->setHeaderLabels({L("图层", "Layers"), L("锁定", "Lock")});
-    tree->setColumnWidth(0, 190);
-    tree->setColumnWidth(1, 44);
+    tree->header()->setStretchLastSection(false);
+    tree->header()->setSectionsMovable(false);
+    tree->header()->setSectionResizeMode(0, QHeaderView::Stretch);
+    tree->header()->setSectionResizeMode(1, QHeaderView::Fixed);
+    tr->updateLockColumnWidth();
+    tree->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    tree->setItemDelegateForColumn(0, new LayerNameDelegate(tree));
     tree->setSelectionMode(QAbstractItemView::ExtendedSelection);
     tree->setIndentation(20);
     tree->setContextMenuPolicy(Qt::CustomContextMenu);
@@ -811,10 +930,25 @@ void MainWindow::buildEditorPage(QWidget *w) {
     llayers->addWidget(tree, 1);
     auto layerTools = new QToolBar;
     layerTools->setObjectName("layerTools");
-    layerTools->setAccessibleName(L("图层操作", "Layer actions"));
+    layerTools->setAccessibleName(L("操作", "Actions"));
     layerTools->setMovable(false);
     layerTools->setToolButtonStyle(Qt::ToolButtonIconOnly);
     layerTools->setIconSize(QSize(18, 18));
+    auto create = new QToolButton;
+    create->setObjectName("layerNew");
+    create->setText(L("新建", "New"));
+    create->setToolTip(create->text());
+    create->setAccessibleName(create->text());
+    create->setIcon(uiIcon(UiIcon::Add));
+    create->setIconSize(layerTools->iconSize());
+    create->setPopupMode(QToolButton::InstantPopup);
+    auto createMenu = new QMenu(create);
+    createMenu->setObjectName("layerNewMenu");
+    populateLayerMenu(createMenu);
+    create->setMenu(createMenu);
+    auto createAction = layerTools->addWidget(create);
+    createAction->setObjectName("layer_new");
+    createAction->setText(create->text());
     layerActions.clear();
     const auto layerCommand = [&](const QString &key, const QString &label, UiIcon icon, const QString &shortcut = {}) {
         auto action = new QAction(uiIcon(icon), label + (shortcut.isEmpty() ? QString() : "\t" + shortcut), layers);
@@ -827,17 +961,18 @@ void MainWindow::buildEditorPage(QWidget *w) {
             else layerAction(key);
         });
     };
-    layerCommand("properties", L("图层属性…", "Layer properties…"), UiIcon::Settings);
-    layerCommand("rename", L("重命名图层…", "Rename layer…"), UiIcon::Edit, "F2");
-    layerCommand("duplicate", L("复制图层", "Duplicate layer"), UiIcon::Duplicate, "Ctrl+J");
-    layerCommand("delete", L("删除图层", "Delete layer"), UiIcon::Delete, "Del");
+    layerCommand("properties", L("属性", "Properties"), UiIcon::Settings);
+    layerCommand("rename", L("重命名", "Rename"), UiIcon::Edit, "F2");
+    layerCommand("duplicate", L("复制", "Copy"), UiIcon::Duplicate, "Ctrl+J");
+    layerCommand("delete", L("删除", "Delete"), UiIcon::Delete, "Del");
+    layerCommand("cut", L("剪切", "Cut"), UiIcon::Cut, "Ctrl+X");
     layerCommand("copy", L("复制", "Copy"), UiIcon::Copy, "Ctrl+C");
     layerCommand("paste", L("粘贴", "Paste"), UiIcon::Paste, "Ctrl+V");
-    layerCommand("group", L("编组", "Group layers"), UiIcon::Group, "Ctrl+G");
-    layerCommand("ungroup", L("取消编组", "Ungroup layers"), UiIcon::Ungroup, "Ctrl+Shift+G");
+    layerCommand("group", L("编组", "Group"), UiIcon::Group, "Ctrl+G");
+    layerCommand("ungroup", L("取消编组", "Ungroup"), UiIcon::Ungroup, "Ctrl+Shift+G");
     layerCommand("front", L("置于顶层", "Bring to front"), UiIcon::Expand);
     layerCommand("back", L("置于底层", "Send to back"), UiIcon::Collapse);
-    for (const auto key : {"rename", "copy", "paste", "group", "ungroup", "duplicate", "delete"}) {
+    for (const auto key : {"cut", "copy", "paste", "group", "ungroup", "delete", "rename"}) {
         layerTools->addAction(layerActions.value(key));
         layerTools->widgetForAction(layerActions.value(key))->setAccessibleName(layerActions.value(key)->toolTip());
     }
@@ -932,8 +1067,10 @@ void MainWindow::buildEditorPage(QWidget *w) {
     right = new QWidget;
     auto rv = new QVBoxLayout(right);
     rv->setContentsMargins(12, 12, 12, 12);
-    heading(L("图层属性", "Layer properties"), rv);
-    auto props = new QFormLayout;
+    heading(L("属性", "Properties"), rv);
+    auto props = propertyForm = new QFormLayout;
+    props->setLabelAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    props->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
     layerName = new QLineEdit;
     layerText = new QLineEdit;
     bindingBox = new QComboBox;
@@ -953,28 +1090,37 @@ void MainWindow::buildEditorPage(QWidget *w) {
         box->setRange(-2048, 2048);
     for (auto box : {wBox, hBox})
         box->setRange(1, 1536);
+    for (auto box : {xBox, yBox, wBox, hBox}) {
+        box->setMinimumWidth(0);
+        box->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+    }
     auto position = new QHBoxLayout;
     position->addWidget(xBox);
     position->addWidget(yBox);
     props->addRow("X / Y", position);
-    auto dimensions = new QHBoxLayout;
+    auto dimensions = dimensionsRow = new QHBoxLayout;
     dimensions->addWidget(wBox);
     dimensions->addWidget(hBox);
     props->addRow(L("宽 / 高", "W / H"), dimensions);
     fontBox = new QSpinBox;
     fontBox->setRange(6, 128);
-    props->addRow(L("字号", "Font size"), fontBox);
     rv->addLayout(props);
     auto visibility = new QHBoxLayout;
     visibleBox = new QCheckBox(L("可见", "Visible"));
     lockedBox = new QCheckBox(L("锁定", "Locked"));
     visibility->addWidget(visibleBox);
     visibility->addWidget(lockedBox);
-    rv->addLayout(visibility);
-    auto colors = new QHBoxLayout;
-    fontColor = button(L("文字颜色", "Text color"), colors, [this] {
+    fontOptions = new QWidget;
+    auto fontRow = new QHBoxLayout(fontOptions);
+    fontRow->setContentsMargins(0, 0, 0, 0);
+    auto fontLabel = new QLabel(L("字号", "Font size"));
+    fontLabel->setBuddy(fontBox);
+    fontBox->setMinimumWidth(0);
+    fontBox->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+    fontRow->addWidget(fontBox, 1);
+    fontColor = button(L("文字颜色", "Text color"), fontRow, [this] {
         auto ids = selection();
-        if (ids.size() != 1)
+        if (ids.size() != 1 || layerLocked(theme.layers(), ids.first()))
             return;
         auto l = findLayer(theme.layers(), ids.first());
         auto c = QColorDialog::getColor(color(l["font"].toObject()["color"]), this,
@@ -990,28 +1136,76 @@ void MainWindow::buildEditorPage(QWidget *w) {
                 t.data["layers"] = a;
             });
     });
+    fillOptions = new QWidget;
+    auto colors = new QHBoxLayout(fillOptions);
+    colors->setContentsMargins(0, 0, 0, 0);
     fillColor = button(L("填充颜色", "Fill color"), colors, [this] {
         auto ids = selection();
-        if (ids.size() != 1)
+        if (ids.size() != 1 || layerLocked(theme.layers(), ids.first()))
             return;
         auto l = findLayer(theme.layers(), ids.first());
-        auto c = QColorDialog::getColor(color(l["fill"], QColor("#28c9bf")), this,
+        auto c = QColorDialog::getColor(layerFillColor(l), this,
                                         L("填充颜色", "Fill color"), QColorDialog::ShowAlphaChannel);
         if (c.isValid())
             mutate([&](Theme &t) {
                 auto a = t.layers();
                 updateLayer(a, ids.first(), [&](QJsonObject &o) {
                     o["fill"] = rgba(c);
-                    o["front"] = rgba(c);
+                    if (o["kind"] == "bar" || o["kind"] == "arc") o["front"] = rgba(c);
                 });
                 t.data["layers"] = a;
             });
     });
-    rv->addLayout(colors);
+    fontColor->setObjectName("componentTextColor");
+    fillColor->setObjectName("componentFillColor");
+    fillColor->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    strokeEnabledBox = new QCheckBox(L("显示边框", "Show border"));
+    strokeEnabledBox->setObjectName("shapeBorderEnabled");
+    props->addRow(strokeEnabledBox);
+    strokeOptions = new QWidget;
+    strokeOptions->setObjectName("shapeStrokeOptions");
+    strokeWidthBox = new QSpinBox;
+    strokeWidthBox->setObjectName("shapeStrokeWidth");
+    strokeWidthBox->setRange(1, 1536);
+    strokeWidthBox->setSuffix(" px");
+    strokeWidthLabel = new QLabel;
+    strokeWidthLabel->setBuddy(strokeWidthBox);
+    auto strokeRow = new QHBoxLayout(strokeOptions);
+    strokeRow->setContentsMargins(0, 0, 0, 0);
+    strokeWidthBox->setMinimumWidth(0);
+    strokeWidthBox->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+    strokeRow->addWidget(strokeWidthBox, 1);
+    strokeColor = new QPushButton;
+    strokeColor->setObjectName("shapeStrokeColor");
+    strokeRow->addWidget(strokeColor);
+    props->addRow(strokeWidthLabel, strokeOptions);
+    props->addRow(fontLabel, fontOptions);
+    props->addRow(fillOptions);
+    for (auto colorButton : {fontColor, strokeColor}) {
+        colorButton->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+        colorButton->installEventFilter(this);
+    }
+    rv->addLayout(visibility);
+    connect(strokeEnabledBox, &QCheckBox::clicked, this, &MainWindow::strokeEdited);
+    connect(strokeWidthBox, &QSpinBox::valueChanged, this, &MainWindow::strokeEdited);
+    connect(strokeColor, &QPushButton::clicked, this, [this] {
+        const auto ids = selection();
+        if (ids.size() != 1 || layerLocked(theme.layers(), ids.first())) return;
+        const auto l = findLayer(theme.layers(), ids.first());
+        const auto c = QColorDialog::getColor(color(l["stroke"]), this,
+            l["kind"] == "line" ? L("线条颜色", "Line color") : L("边框颜色", "Border color"),
+            QColorDialog::ShowAlphaChannel);
+        if (!c.isValid()) return;
+        mutate([&](Theme &t) {
+            auto a = t.layers();
+            updateLayer(a, ids.first(), [&](QJsonObject &o) { o["stroke"] = rgba(c); });
+            t.data["layers"] = a;
+        });
+    });
     for (auto edit : {layerName, layerText})
         connect(edit, &QLineEdit::editingFinished, this, &MainWindow::propertyEdited);
     for (auto box : {xBox, yBox, wBox, hBox, fontBox})
-        connect(box, &QSpinBox::editingFinished, this, &MainWindow::propertyEdited);
+        connect(box, &QSpinBox::valueChanged, this, &MainWindow::propertyEdited);
     connect(bindingBox, &QComboBox::currentIndexChanged, this, [this] {
         if (!building)
             propertyEdited();
@@ -1019,10 +1213,6 @@ void MainWindow::buildEditorPage(QWidget *w) {
     for (auto box : {visibleBox, lockedBox})
         connect(box, &QCheckBox::clicked, this, &MainWindow::propertyEdited);
     rv->addStretch();
-    auto files = new QHBoxLayout;
-    button(L("背景图", "Background"), files, [this] { backgroundImage(); });
-    button(L("导出 PNG", "Export PNG"), files, [this] { exportImage(); });
-    rv->addLayout(files);
     propertyScroll->setWidget(right);
     inspectorTabs->addTab(propertyScroll, L("属性", "Properties"));
     editorSplit->addWidget(inspectorTabs);
@@ -1190,6 +1380,25 @@ void MainWindow::updateSensorColumns() {
     for (int column = 0; column < 3; ++column)
         sensorTable->setColumnWidth(column, hasSavedWidths ? savedWidths[column].toInt() : widths[column]);
     sensorTable->setProperty("columnsInitialized", true);
+}
+QLabel *MainWindow::themeHeading(QHBoxLayout *layout, const QString &name, const QString &buttonName) {
+    auto caption = new InlineThemeTitle;
+    caption->setObjectName(name);
+    layout->addWidget(caption);
+    auto rename = new QToolButton;
+    rename->setObjectName(buttonName);
+    rename->setIcon(uiIcon(UiIcon::Edit));
+    rename->setToolTip(L("重命名主题", "Rename theme"));
+    rename->setAccessibleName(rename->toolTip());
+    layout->addWidget(rename);
+    layout->addStretch();
+    connect(rename, &QToolButton::clicked, this, [this, caption] {
+        caption->startEditing(theme.name(), [this, file = path](const QString &name, QString &error) {
+            if (path != file || name == theme.name()) return true;
+            return renameLibraryPath(file, name, error);
+        });
+    });
+    return caption;
 }
 QWidget *MainWindow::zoomControls(Canvas *target, const QString &prefix) {
     auto controls = new QWidget;
@@ -1511,6 +1720,11 @@ void MainWindow::buildSettings(QWidget *w) {
     button(L("打开数据目录", "Open data folder"), buttons,
            [this] { QDesktopServices::openUrl(QUrl::fromLocalFile(dataDir)); });
     buttons->addStretch();
+    auto version = new QLabel(L("版本 ", "Version ") + QStringLiteral(SCREEN_VERSION));
+    version->setObjectName("applicationVersion");
+    version->setProperty("uiRole", "caption");
+    version->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    buttons->addWidget(version);
     outer->addLayout(buttons);
 }
 void MainWindow::reloadUiThemes() {
@@ -1990,6 +2204,8 @@ void MainWindow::properties() {
     layerText->setText(l["text"].toString());
     xBox->setValue(l["x"].toInt());
     yBox->setValue(l["y"].toInt());
+    wBox->setMinimum(l["kind"] == "line" ? 0 : 1);
+    hBox->setMinimum(l["kind"] == "line" ? 0 : 1);
     wBox->setValue(l["w"].toInt(100));
     hBox->setValue(l["h"].toInt(30));
     fontBox->setValue(l["font"].toObject()["size"].toInt(20));
@@ -1997,13 +2213,68 @@ void MainWindow::properties() {
     visibleBox->setChecked(l.value("visible").toBool(true));
     lockedBox->setChecked(l["locked"].toBool());
     bool text = l["kind"] == "text" || l["kind"] == "sensor";
+    const bool bound = l["kind"] == "sensor" || l["kind"] == "bar" || l["kind"] == "arc";
+    propertyForm->setRowVisible(layerText, l["kind"] == "text");
+    propertyForm->setRowVisible(bindingBox, bound);
+    propertyForm->setRowVisible(dimensionsRow, has && l["kind"] != "group" && l["kind"] != "arc");
+    propertyForm->setRowVisible(fontOptions, text);
     layerText->setEnabled(has && !locked && l["kind"] == "text");
     fontBox->setEnabled(has && !locked && text);
     bindingBox->setEnabled(has && !locked && l["kind"] != "text" && l["kind"] != "group");
     wBox->setEnabled(has && !locked && l["kind"] != "group");
     hBox->setEnabled(wBox->isEnabled());
     fontColor->setEnabled(has && !locked && text);
+    const bool line = l["kind"] == "line";
+    const bool shape = text || l["kind"] == "rectangle" || l["kind"] == "ellipse";
+    propertyForm->setRowVisible(strokeOptions, line || shape);
+    propertyForm->setRowVisible(strokeEnabledBox, shape);
+    strokeEnabledBox->setEnabled(has && !locked);
+    const bool border = layerStrokeWidth(l) > 0;
+    strokeEnabledBox->setChecked(border);
+    strokeWidthBox->setValue(qMax(1, l["stroke_width"].toInt(1)));
+    strokeWidthLabel->setText(line ? L("线条粗细", "Line width") : L("边框粗细", "Border width"));
+    strokeColor->setText(line ? L("线条颜色", "Line color") : L("边框颜色", "Border color"));
+    fontColor->setIcon(colorSwatch(color(l["font"].toObject()["color"]), palette()));
+    fillColor->setIcon(colorSwatch(layerFillColor(l), palette()));
+    strokeColor->setIcon(colorSwatch(color(l["stroke"]), palette()));
+    const bool fill = l["kind"] == "rectangle" || l["kind"] == "ellipse" || l["kind"] == "bar" || l["kind"] == "arc";
+    fillColor->setEnabled(has && !locked && fill);
+    propertyForm->setRowVisible(fillOptions, fill);
+    alignPropertyColors();
+    const bool editableStroke = has && !locked && (line || (shape && border));
+    strokeWidthBox->setEnabled(editableStroke);
+    strokeWidthLabel->setEnabled(editableStroke);
+    strokeColor->setEnabled(editableStroke);
     building = was;
+}
+void MainWindow::alignPropertyColors() {
+    if (!fontColor || !strokeColor) return;
+    int width = 0;
+    for (auto button : {fontColor, strokeColor}) {
+        button->ensurePolished();
+        width = qMax(width, button->sizeHint().width());
+    }
+    for (auto button : {fontColor, strokeColor}) button->setFixedWidth(width);
+}
+void MainWindow::strokeEdited() {
+    const auto ids = selection();
+    if (building || ids.size() != 1 || layerLocked(theme.layers(), ids.first())) return;
+    const auto l = findLayer(theme.layers(), ids.first());
+    const bool shape = l["kind"] == "text" || l["kind"] == "sensor" || l["kind"] == "rectangle" || l["kind"] == "ellipse";
+    if (!shape && l["kind"] != "line") return;
+    const bool enabled = strokeEnabledBox->isChecked();
+    const int width = strokeWidthBox->value();
+    const int oldWidth = l["stroke_width"].toInt(1);
+    if ((shape ? qMax(1, oldWidth) : oldWidth) == width &&
+        (!shape || (layerStrokeWidth(l) > 0) == enabled)) return;
+    mutate([&](Theme &t) {
+        auto a = t.layers();
+        updateLayer(a, ids.first(), [&](QJsonObject &o) {
+            if (shape) o["stroke_enabled"] = enabled;
+            o["stroke_width"] = width;
+        });
+        t.data["layers"] = a;
+    });
 }
 void MainWindow::propertyEdited() {
     if (building || selection().size() != 1)
@@ -2018,18 +2289,20 @@ void MainWindow::propertyEdited() {
                 return;
             }
             l["name"] = layerName->text().trimmed();
-            l["text"] = layerText->text();
-            l["metric"] = bindingBox->currentData().toString();
+            const bool text = l["kind"] == "text" || l["kind"] == "sensor";
+            if (l["kind"] == "text") l["text"] = layerText->text();
+            if (l["kind"] == "sensor" || l["kind"] == "bar" || l["kind"] == "arc")
+                l["metric"] = bindingBox->currentData().toString();
             l["x"] = xBox->value();
             l["y"] = yBox->value();
-            if (l["kind"] != "group") {
+            if (l["kind"] != "group" && l["kind"] != "arc") {
                 l["w"] = wBox->value();
                 l["h"] = hBox->value();
             }
             l["visible"] = visibleBox->isChecked();
             l["locked"] = lockedBox->isChecked();
             auto f = l["font"].toObject();
-            if (f["size"].toInt(20) != fontBox->value()) {
+            if (text && f["size"].toInt(20) != fontBox->value()) {
                 f["size"] = fontBox->value();
                 if (f["family"] != "Turing Screen Symbols" && f["family"] != "Turing Screen Latin" &&
                     f["family"] != "Turing Screen Mono")
@@ -2038,7 +2311,7 @@ void MainWindow::propertyEdited() {
                 f["width"] = 0;
                 f["spacing"] = 0;
             }
-            l["font"] = f;
+            if (text) l["font"] = f;
         });
         t.data["layers"] = a;
     });
@@ -2195,10 +2468,12 @@ void MainWindow::exportImage() {
     if (!target.isEmpty())
         frame.save(target);
 }
-static QString importImage(const QString &file) {
+static QString importImage(const QString &file, QSize target = {}) {
     QImageReader r(file);
     auto size = r.size();
-    if (size.width() > 1536 || size.height() > 1536)
+    if (target.isValid())
+        r.setScaledSize(target);
+    else if (size.width() > 1536 || size.height() > 1536)
         throw std::runtime_error("Please resize the image to 1536 x 1536 or smaller");
     auto img = r.read();
     if (img.isNull())
@@ -2210,15 +2485,21 @@ static QString importImage(const QString &file) {
     return QString::fromLatin1(data.toBase64());
 }
 void MainWindow::backgroundImage() {
-    auto file = QFileDialog::getOpenFileName(this, L("背景图", "Background"), {},
+    auto file = QFileDialog::getOpenFileName(this, L("设置主题背景图", "Set theme background image"), {},
                                              "Images (*.png *.jpg *.jpeg *.bmp)");
     if (file.isEmpty())
         return;
+    QString error;
+    if (!setThemeBackground(file, error)) QMessageBox::warning(this, L("图像错误", "Image error"), error);
+}
+bool MainWindow::setThemeBackground(const QString &file, QString &error) {
     try {
-        auto encoded = importImage(file);
+        auto encoded = importImage(file, theme.size());
         mutate([&](Theme &t) { t.data["background"] = encoded; });
+        return true;
     } catch (const std::exception &e) {
-        QMessageBox::warning(this, L("图像错误", "Image error"), QString::fromUtf8(e.what()));
+        error = QString::fromUtf8(e.what());
+        return false;
     }
 }
 void MainWindow::createLayer(const QString &kind, QPointF point, QSizeF size) {
@@ -2227,7 +2508,7 @@ void MainWindow::createLayer(const QString &kind, QPointF point, QSizeF size) {
     QString name = kind;
     if (kind == "text") {
         bool ok = false;
-        name = QInputDialog::getText(this, L("新建文字图层", "New text layer"), L("文字内容", "Text"),
+        name = QInputDialog::getText(this, L("新建", "New"), L("文字内容", "Text"),
                                      QLineEdit::Normal, L("新文字", "New text"), &ok);
         if (!ok)
             return;
@@ -2235,7 +2516,9 @@ void MainWindow::createLayer(const QString &kind, QPointF point, QSizeF size) {
     auto l = newLayer(kind, name, metric);
     l["x"] = point.x();
     l["y"] = point.y();
-    if (kind == "rectangle" || kind == "ellipse" || kind == "line") {
+    if (kind == "line") {
+        setLayerLine(l, QLineF(point, point + QPointF(size.width(), size.height())));
+    } else if (kind == "rectangle" || kind == "ellipse") {
         l["w"] = size.width();
         l["h"] = size.height();
     }
@@ -2247,7 +2530,7 @@ void MainWindow::createLayer(const QString &kind, QPointF point, QSizeF size) {
         try {
             l["data"] = importImage(file);
             QImageReader reader(file);
-            auto fit = reader.size().scaled(theme.size(), Qt::KeepAspectRatio);
+            auto fit = reader.size().scaled(theme.size() - QSize(48, 48), Qt::KeepAspectRatio);
             l["w"] = fit.width();
             l["h"] = fit.height();
             l["name"] = QFileInfo(file).baseName();
@@ -2268,6 +2551,9 @@ void MainWindow::createLayer(const QString &kind, QPointF point, QSizeF size) {
         l["x"] = l["x"].toDouble() - at.x();
         l["y"] = l["y"].toDouble() - at.y();
     }
+    // Drag coordinates can be fractional at arbitrary zoom levels. Store
+    // integer display pixels so rendering and the property editors agree.
+    for (const auto key : {"x", "y", "w", "h"}) l[key] = qRound(l[key].toDouble());
     auto id = l["id"].toString();
     mutate([&](Theme &t) {
         auto a = t.layers();
@@ -2291,17 +2577,34 @@ void MainWindow::rename() {
     auto ids = selection();
     if (ids.size() != 1 || layerLocked(theme.layers(), ids.first()))
         return;
-    bool ok = false;
-    auto name =
-        QInputDialog::getText(this, L("重命名图层", "Rename layer"), L("名称", "Name"), QLineEdit::Normal,
-                              findLayer(theme.layers(), ids.first())["name"].toString(), &ok)
-            .trimmed();
-    if (ok && !name.isEmpty())
-        mutate([&](Theme &t) {
-            auto a = t.layers();
-            updateLayer(a, ids.first(), [&](QJsonObject &o) { o["name"] = name; });
-            t.data["layers"] = a;
-        });
+    QTreeWidgetItemIterator items(tree);
+    while (*items) {
+        if ((*items)->data(0, Qt::UserRole).toString() == ids.first()) {
+            editorSplit->setPaneCollapsed(1, false);
+            inspectorTabs->setCurrentIndex(0);
+            for (auto parent = (*items)->parent(); parent; parent = parent->parent())
+                parent->setExpanded(true);
+            tree->setCurrentItem(*items, 0);
+            tree->scrollToItem(*items);
+            // Let the context menu close and restore its focus before opening
+            // the editor; otherwise that focus change can immediately close it.
+            QTimer::singleShot(0, tree, [this, id = ids.first()] {
+                if (selection() != QStringList{id} || layerLocked(theme.layers(), id)) return;
+                QTreeWidgetItemIterator target(tree);
+                while (*target) {
+                    if ((*target)->data(0, Qt::UserRole).toString() == id) {
+                        tree->scrollToItem(*target);
+                        tree->setFocus();
+                        tree->editItem(*target, 0);
+                        return;
+                    }
+                    ++target;
+                }
+            });
+            return;
+        }
+        ++items;
+    }
 }
 void MainWindow::reparent(const QStringList &raw, const QString &parent, int index) {
     auto ids = normalizedSelection(theme.layers(), raw);
@@ -2332,34 +2635,47 @@ void MainWindow::reparent(const QStringList &raw, const QString &parent, int ind
 }
 void MainWindow::layerAction(const QString &action) {
     auto ids = normalizedSelection(theme.layers(), selection());
+    QJsonArray copied;
     if (action == "copy" || action == "cut" || action == "duplicate") {
-        clipboard = {};
+        if (action == "cut")
+            ids.erase(std::remove_if(ids.begin(), ids.end(), [&](const QString &id) { return layerLocked(theme.layers(), id); }), ids.end());
+        if (ids.isEmpty()) return;
         for (auto id : ids) {
             auto l = findLayer(theme.layers(), id);
             auto p = absolutePosition(theme.layers(), id);
             l["x"] = p.x();
             l["y"] = p.y();
-            clipboard.append(l);
+            copied.append(l);
+        }
+        if (action != "duplicate") {
+            clipboard = copied;
+            clipboardCut = action == "cut";
         }
         updateLayerActions();
         if (action == "copy")
             return;
     }
     if (action == "paste" || action == "duplicate") {
+        const auto items = action == "duplicate" ? copied : clipboard;
+        if (items.isEmpty()) return;
+        const bool fromCut = action == "paste" && clipboardCut;
         QStringList added;
         mutate([&](Theme &t) {
             auto a = t.layers();
-            for (auto v : clipboard) {
+            for (auto v : items) {
                 auto o = v.toObject();
                 regenerateIds(o);
-                o["x"] = o["x"].toDouble() + 8;
-                o["y"] = o["y"].toDouble() + 8;
-                o["name"] = o["name"].toString() + L(" 副本", " copy");
+                if (!fromCut) {
+                    o["x"] = o["x"].toDouble() + 8;
+                    o["y"] = o["y"].toDouble() + 8;
+                    o["name"] = o["name"].toString() + L(" 副本", " copy");
+                }
                 added.append(o["id"].toString());
                 a.append(o);
             }
             t.data["layers"] = a;
         });
+        if (fromCut && !added.isEmpty() && !findLayer(theme.layers(), added.first()).isEmpty()) clipboardCut = false;
         selection(added);
         return;
     }
@@ -2474,11 +2790,9 @@ void MainWindow::contextMenu(QPoint global) {
     QMenu m(this);
     m.setObjectName("layerContextMenu");
     const auto add = [&](const char *key) { m.addAction(layerActions.value(key)); };
-    add("properties"); add("rename");
+    add("cut"); add("copy"); add("paste");
     m.addSeparator();
-    add("duplicate"); add("delete");
-    m.addSeparator();
-    add("copy"); add("paste");
+    add("delete"); add("rename");
     m.addSeparator();
     add("group"); add("ungroup");
     auto arrange = m.addMenu(L("排列", "Arrange"));
@@ -2487,7 +2801,11 @@ void MainWindow::contextMenu(QPoint global) {
     arrange->addAction(layerActions.value("back"));
     arrange->setEnabled(layerActions.value("front")->isEnabled());
     m.addSeparator();
-    populateLayerMenu(m.addMenu(L("新建图层", "New layer")));
+    auto create = m.addMenu(L("新建", "New"));
+    create->setObjectName("layerContextNewMenu");
+    populateLayerMenu(create);
+    m.addSeparator();
+    add("properties");
     m.exec(global);
 }
 void MainWindow::render() {

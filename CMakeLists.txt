@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(TuringScreenQt VERSION 0.2.2 LANGUAGES CXX)
+project(TuringScreenQt VERSION 0.2.3 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
@@ -63,6 +63,18 @@ if(BUILD_TESTING)
             trayMenuKeepsSystemStyleAcrossPalettes traySerialMenuListsPortsAndMarksOnlyConnectedPort
             trayMenuUsesNativeWindowsItems
             editorToolsAndLayerFooterKeepActionsAccessible
+            layerSelectionAndRenameKeepContentAligned themeTitlesRenameInlineWithoutMovingHeaders
+            componentRenameRevealsAndEditsTheSelectedComponent
+            layerLockColumnStaysAtRightAcrossPanelSizes
+            drawnShapesAppearAtTheirSelectionImmediately
+            lineToolPreviewsAndKeepsDraggedEndpoints
+            componentCutPasteHonorsLocksAndUndo componentActionsUseExplorerOrder
+            themeBackgroundActionsApplyClearAndPersist
+            imageToolbarCreatesAComponentAndCancelKeepsTheTool
+            imageShiftResizeUsesOriginalAspectAtEveryCorner
+            shapeStrokePropertiesRenderPersistAndUndo
+            textAndSensorStylesHaveSwatchesAndOrderedProperties
+            numericPropertiesUpdateLiveAndUnsupportedPropertiesAreHidden
             -o -,txt -o "${CMAKE_CURRENT_BINARY_DIR}/gui-native-test.txt,txt")
         set_tests_properties(gui-native PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=windows:fontengine=gdi")
     endif()

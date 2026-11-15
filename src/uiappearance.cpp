@@ -123,6 +123,13 @@ public:
             painter->drawLine(QPointF(19, 4), QPointF(19, 7));
             painter->drawLine(QPointF(12, 4), QPointF(12, 21));
             painter->drawLine(QPointF(8, 21), QPointF(16, 21));
+        } else if (icon == UiIcon::Image) {
+            painter->drawRoundedRect(QRectF(3, 4, 18, 16), 1, 1);
+            painter->drawEllipse(QPointF(16, 8), 1.6, 1.6);
+            QPainterPath mountains;
+            mountains.moveTo(4, 18); mountains.lineTo(10, 10); mountains.lineTo(14, 14);
+            mountains.lineTo(17, 11); mountains.lineTo(21, 16);
+            painter->drawPath(mountains);
         } else if (icon == UiIcon::Rectangle) {
             painter->drawRect(QRectF(4, 5, 16, 14));
         } else if (icon == UiIcon::Ellipse) {
@@ -145,6 +152,11 @@ public:
             painter->drawRect(QRectF(3, 3, 7, 7)); painter->drawRect(QRectF(14, 14, 7, 7));
             painter->drawLine(QPointF(14, 4), QPointF(20, 4)); painter->drawLine(QPointF(20, 4), QPointF(20, 10));
             painter->drawLine(QPointF(4, 14), QPointF(4, 20)); painter->drawLine(QPointF(4, 20), QPointF(10, 20));
+        } else if (icon == UiIcon::Cut) {
+            painter->drawEllipse(QPointF(5.5, 5.5), 2.8, 2.8);
+            painter->drawEllipse(QPointF(5.5, 18.5), 2.8, 2.8);
+            painter->drawLine(QPointF(7.5, 7.5), QPointF(21, 21));
+            painter->drawLine(QPointF(7.5, 16.5), QPointF(21, 3));
         } else if (icon == UiIcon::Copy || icon == UiIcon::Duplicate) {
             QPainterPath back; back.moveTo(7, 16); back.lineTo(3, 16); back.lineTo(3, 3); back.lineTo(16, 3); back.lineTo(16, 7);
             painter->drawPath(back); painter->drawRoundedRect(QRectF(8, 8, 13, 13), 1, 1);

@@ -5,6 +5,7 @@
 #include "pseudoscreen.h"
 #include "weathernetwork.h"
 #include <QJsonDocument>
+#include <QBuffer>
 #include <QMouseEvent>
 #include <QScopeGuard>
 #include <QtTest>
@@ -1551,6 +1552,301 @@ private slots:
             QCOMPARE(w.theme.data, edited);
         }
     }
+    void componentRenameRevealsAndEditsTheSelectedComponent_data() {
+        QTest::addColumn<int>("tab");
+        QTest::addColumn<bool>("collapsed");
+        QTest::addColumn<bool>("f2");
+        QTest::newRow("menu-layers") << 0 << false << false;
+        QTest::newRow("menu-properties") << 1 << false << false;
+        QTest::newRow("menu-properties-collapsed-pane") << 1 << true << false;
+        QTest::newRow("f2-layers") << 0 << false << true;
+        QTest::newRow("f2-properties") << 1 << false << true;
+        QTest::newRow("f2-properties-collapsed-pane") << 1 << true << true;
+    }
+    void componentRenameRevealsAndEditsTheSelectedComponent() {
+        QFETCH(int, tab);
+        QFETCH(bool, collapsed);
+        QFETCH(bool, f2);
+        TestProfile dir;
+        MainWindow w(dir.path());
+        const auto close = qScopeGuard([&] { w.dirty = false; w.quitting = true; });
+        w.sampling.stop(); w.resize(1280, 820); w.show(); w.setEditing(true);
+        auto target = newLayer("rectangle", "Rename target");
+        target["x"] = 200; target["y"] = 150; target["w"] = 80; target["h"] = 40;
+        const auto id = target["id"].toString();
+        auto inner = newLayer("group", "Inner");
+        inner["x"] = 15; inner["y"] = 10; inner["children"] = QJsonArray{target};
+        auto outer = newLayer("group", "Outer");
+        outer["x"] = 25; outer["y"] = 20; outer["children"] = QJsonArray{inner};
+        QJsonArray layers{outer};
+        for (int i = 0; i < 60; ++i) layers.append(newLayer("text", QString("Filler %1").arg(i)));
+        w.theme.data["layers"] = layers;
+        w.render(); w.selection({id});
+        w.tree->collapseAll(); w.tree->scrollToTop();
+        w.inspectorTabs->setCurrentIndex(tab);
+        w.editorSplit->setPaneCollapsed(1, collapsed);
+        QCoreApplication::processEvents();
+        w.undoHistory.clear(); w.redoHistory.clear();
+        bool menuClicked = false;
+        if (!f2) QTimer::singleShot(0, &w, [&] {
+            auto menu = w.findChild<QMenu *>("layerContextMenu"); QVERIFY(menu);
+            const auto closeMenu = qScopeGuard([&] { menu->close(); });
+            auto action = w.layerActions["rename"];
+            QVERIFY(menu->actions().contains(action) && action->isEnabled());
+            QTest::mouseClick(menu, Qt::LeftButton, Qt::NoModifier, menu->actionGeometry(action).center());
+            menuClicked = true;
+        });
+        const auto point = absolutePosition(w.theme.layers(), id) + QPointF(40, 20);
+        if (f2) {
+            w.activateWindow(); w.canvas->setFocus(); QCoreApplication::processEvents();
+            QTest::keyClick(w.canvas, Qt::Key_F2);
+        } else {
+            QTest::mouseClick(w.canvas, Qt::RightButton, Qt::NoModifier, canvasPoint(*w.canvas, point));
+            QVERIFY(menuClicked);
+        }
+        QCOMPARE(w.inspectorTabs->currentIndex(), 0);
+        QVERIFY(!w.editorSplit->paneCollapsed(1));
+        QLineEdit *editor = nullptr;
+        QTRY_VERIFY([&] {
+            for (auto field : w.tree->findChildren<QLineEdit *>())
+                if (field->isVisible()) { editor = field; return true; }
+            return false;
+        }());
+        if (QGuiApplication::platformName() != "offscreen") QVERIFY(editor->hasFocus());
+        auto item = w.tree->currentItem();
+        QVERIFY(item);
+        QCOMPARE(item->data(0, Qt::UserRole).toString(), id);
+        for (auto parent = item->parent(); parent; parent = parent->parent()) QVERIFY(parent->isExpanded());
+        QVERIFY(w.tree->viewport()->rect().intersects(w.tree->visualItemRect(item)));
+        QCOMPARE(editor->selectedText(), QString("Rename target"));
+        QTest::keyClicks(editor, "Renamed component"); QTest::keyClick(editor, Qt::Key_Return);
+        QTRY_COMPARE(findLayer(w.theme.layers(), id)["name"].toString(), QString("Renamed component"));
+        auto expected = target; expected["name"] = "Renamed component";
+        QCOMPARE(findLayer(w.theme.layers(), id), expected);
+        QCOMPARE(w.undoHistory.size(), 1);
+        w.undo(); QCOMPARE(findLayer(w.theme.layers(), id), target);
+    }
+    void layerSelectionAndRenameKeepContentAligned() {
+        TestProfile dir;
+        const auto restore = qScopeGuard([&] { UiAppearance::instance().apply("system", dir.path()); });
+        MainWindow w(dir.path());
+        const auto close = qScopeGuard([&] { w.dirty = false; w.quitting = true; });
+        w.sampling.stop();
+        w.choose(dir.path() + "/themes/custom/nightfall.json");
+        w.setEditing(true);
+        w.show();
+        w.selectUiTheme("catppuccin-macchiato");
+        QCoreApplication::processEvents();
+        QTreeWidgetItem *item = nullptr;
+        QTreeWidgetItemIterator items(w.tree);
+        while (*items) {
+            if ((*items)->data(0, Qt::UserRole).toString() == "nightfall-weather-condition") item = *items;
+            ++items;
+        }
+        QVERIFY(item);
+        w.tree->scrollToItem(item);
+        const auto index = w.tree->indexFromItem(item);
+        const auto inkBounds = [](const QImage &image, QColor foreground, QColor background) {
+            const auto distance = [](QColor a, QColor b) {
+                return qAbs(a.red() - b.red()) + qAbs(a.green() - b.green()) + qAbs(a.blue() - b.blue());
+            };
+            QRect bounds;
+            for (int y = 0; y < image.height(); ++y)
+                for (int x = 0; x < image.width(); ++x)
+                    if (distance(image.pixelColor(x, y), foreground) < distance(image.pixelColor(x, y), background))
+                        bounds |= QRect(x, y, 1, 1);
+            return bounds;
+        };
+        for (int size : {9, 12, 16}) {
+            auto font = w.tree->font(); font.setPointSize(size); w.tree->setFont(font);
+            QCoreApplication::processEvents();
+            const auto paint = [&](bool selected) {
+                w.tree->clearSelection();
+                if (selected) w.tree->setCurrentItem(item);
+                w.tree->scrollToItem(item, QAbstractItemView::PositionAtCenter);
+                QCoreApplication::processEvents();
+                const auto view = w.tree->viewport()->grab();
+                const auto row = w.tree->visualRect(index);
+                const auto image = view.toImage().copy(QRect((QPointF(row.topLeft()) * view.devicePixelRatio()).toPoint(),
+                    (QSizeF(row.size()) * view.devicePixelRatio()).toSize()));
+                const auto background = w.tree->palette().color(selected ? QPalette::Highlight : QPalette::Base);
+                const auto shots = qEnvironmentVariable("TURING_LAYER_UI_SHOTS");
+                if (!shots.isEmpty()) {
+                    QDir().mkpath(shots);
+                    image.save(shots + QString("/row-%1-%2.png").arg(size).arg(selected ? "selected" : "normal"));
+                }
+                return inkBounds(image, w.tree->palette().color(selected ? QPalette::HighlightedText : QPalette::Text), background);
+            };
+            const auto normal = paint(false), selected = paint(true);
+            QVERIFY(!normal.isEmpty());
+            QCOMPARE(selected, normal);
+
+            w.tree->setCurrentItem(item);
+            w.tree->editItem(item, 0);
+            QCoreApplication::processEvents();
+            QLineEdit *editor = nullptr;
+            for (auto field : w.tree->findChildren<QLineEdit *>()) if (field->isVisible()) editor = field;
+            QVERIFY(editor && editor->isVisible());
+            const auto row = w.tree->visualRect(index);
+            QVERIFY(editor->geometry().left() >= row.left());
+            QVERIFY(editor->geometry().right() <= row.right());
+            QCOMPARE(editor->geometry().bottom(), row.bottom() - 1);
+            QCOMPARE(editor->font().pointSizeF(), w.tree->font().pointSizeF());
+            QVERIFY(editor->height() >= editor->fontMetrics().height() + 8);
+            editor->setText("gypqj_");
+            editor->deselect();
+            editor->setCursorPosition(0);
+            QLineEdit reference(w.tree->viewport());
+            reference.setFont(editor->font());
+            reference.setText(editor->text());
+            reference.resize(editor->width(), editor->height() + 20);
+            const auto glyphs = [&](QLineEdit *field) {
+                const auto pixmap = field->grab();
+                // Ignore the frame and the caret at the start of the line.
+                const auto content = field->rect().adjusted(5, 2, -2, -2);
+                auto image = pixmap.toImage().copy(QRect((QPointF(content.topLeft()) * pixmap.devicePixelRatio()).toPoint(),
+                    (QSizeF(content.size()) * pixmap.devicePixelRatio()).toSize()));
+                const auto bounds = inkBounds(image, field->palette().color(QPalette::Text), field->palette().color(QPalette::Base));
+                return image.copy(bounds);
+            };
+            const auto actualGlyphs = glyphs(editor), expectedGlyphs = glyphs(&reference);
+            QCOMPARE(actualGlyphs.size(), expectedGlyphs.size());
+            QCOMPARE(actualGlyphs, expectedGlyphs);
+            const auto shots = qEnvironmentVariable("TURING_LAYER_UI_SHOTS");
+            if (!shots.isEmpty()) {
+                editor->setText(item->text(0));
+                editor->deselect();
+                editor->setCursorPosition(0);
+                w.tree->grab().save(shots + QString("/layer-renaming-%1.png").arg(size));
+            }
+            QTest::keyClick(editor, Qt::Key_Escape);
+            QCoreApplication::processEvents();
+        }
+    }
+    void layerLockColumnStaysAtRightAcrossPanelSizes() {
+        TestProfile dir;
+        MainWindow w(dir.path(), dir.path() + "/themes/custom/nightfall.json");
+        const auto close = qScopeGuard([&] { w.dirty = false; w.quitting = true; });
+        w.sampling.stop(); w.show(); w.setEditing(true);
+        QCoreApplication::processEvents();
+        auto header = w.tree->header();
+        for (int size : {9, 12}) {
+            auto font = w.tree->font(); font.setPointSize(size); w.tree->setFont(font);
+            QCoreApplication::processEvents();
+            const int lockWidth = header->sectionSize(1);
+            for (int width : {220, 360, 480, 260}) {
+                w.editorSplit->setSizes({w.editorSplit->width() - width, width});
+                QCoreApplication::processEvents();
+                QCOMPARE(header->sectionSize(1), lockWidth);
+                QCOMPARE(header->sectionViewportPosition(1) + lockWidth, header->viewport()->width());
+                QCOMPARE(header->sectionSize(0), header->viewport()->width() - lockWidth);
+                QCOMPARE(w.tree->horizontalScrollBar()->maximum(), 0);
+                QVERIFY(!w.tree->horizontalScrollBar()->isVisible());
+                const auto shots = qEnvironmentVariable("TURING_LAYER_UI_SHOTS");
+                if (!shots.isEmpty()) w.tree->grab().save(shots + QString("/lock-column-%1-%2.png").arg(size).arg(width));
+            }
+        }
+    }
+    void themeTitlesRenameInlineWithoutMovingHeaders() {
+        TestProfile dir;
+        const auto restore = qScopeGuard([&] { UiAppearance::instance().apply("system", dir.path()); });
+        MainWindow w(dir.path(), dir.path() + "/themes/custom/nightfall.json");
+        const auto close = qScopeGuard([&] { w.dirty = false; w.quitting = true; });
+        w.sampling.stop();
+        w.mutate([](Theme &theme) { theme.data["description"] = "Unsaved description"; });
+        QVERIFY(w.dirty);
+        w.show();
+        w.selectUiTheme("catppuccin-macchiato");
+        const auto shots = qEnvironmentVariable("TURING_LAYER_UI_SHOTS");
+        const auto capture = [&](const QString &name) {
+            if (!shots.isEmpty()) {
+                QDir().mkpath(shots);
+                w.grab().save(shots + '/' + name + ".png");
+            }
+        };
+        const auto titleInk = [](QLabel *caption) {
+            const auto image = caption->grab().toImage();
+            QRect bounds;
+            const int prefixWidth = qRound(caption->fontMetrics().horizontalAdvance("Nig") * image.devicePixelRatio());
+            for (int y = 0; y < image.height(); ++y)
+                for (int x = 0; x < qMin(prefixWidth, image.width()); ++x) {
+                    const auto pixel = image.pixelColor(x, y);
+                    if (pixel.alpha() > 128 && pixel.red() + pixel.green() + pixel.blue() > 400)
+                        bounds |= QRect(x, y, 1, 1);
+                }
+            return bounds;
+        };
+        for (const bool editing : {false, true}) {
+            w.setPage(editing ? MainWindow::EditorPage : MainWindow::LibraryPage);
+            QCoreApplication::processEvents();
+            auto caption = editing ? w.editorThemeTitle : w.title;
+            auto button = w.findChild<QToolButton *>(editing ? "renameEditorTheme" : "renamePreviewTheme");
+            QVERIFY(button && button->isEnabled());
+            const auto geometry = caption->geometry();
+            const auto buttonPosition = button->pos();
+            const auto originalName = w.theme.name();
+            const auto originalPath = w.path;
+            const auto originalInk = titleInk(caption);
+            capture(editing ? "editor-title" : "preview-title");
+            button->click();
+            auto editor = caption->findChild<QLineEdit *>();
+            QVERIFY(editor && editor->isVisible());
+            QVERIFY(!QApplication::activeModalWidget());
+            QCOMPARE(editor->text(), originalName);
+            QCOMPARE(caption->geometry(), geometry);
+            QCOMPARE(button->pos(), buttonPosition);
+            editor->deselect();
+            capture(editing ? "editor-title-editing" : "preview-title-editing");
+            QCOMPARE(titleInk(caption), originalInk);
+            editor->setText("Do not save");
+            w.refreshRuntimeUi();
+            QCOMPARE(editor->text(), QString("Do not save")); // Sampling must not overwrite an active edit.
+            QTest::keyClick(editor, Qt::Key_Escape);
+            QVERIFY(!editor->isVisible());
+            QCOMPARE(w.theme.name(), originalName);
+            QCOMPARE(w.path, originalPath);
+            button->click();
+            const auto name = editing ? QString("Editor renamed") : QString("Preview renamed");
+            editor->setText(name);
+            QTest::keyClick(editor, Qt::Key_Return);
+            QVERIFY(!editor->isVisible());
+            QCOMPARE(w.theme.name(), name);
+            QVERIFY(QFileInfo::exists(w.path));
+            QVERIFY(!QFileInfo::exists(originalPath));
+            QVERIFY(w.dirty);
+            QCOMPARE(w.title->text(), name + " *");
+            QCOMPARE(w.editorThemeTitle->text(), w.title->text());
+        }
+        w.findChild<QToolButton *>("renameEditorTheme")->click();
+        auto editor = w.editorThemeTitle->findChild<QLineEdit *>();
+        editor->setText("Focus renamed");
+        w.canvas->setFocus();
+        QCoreApplication::processEvents();
+        QVERIFY(!editor->isVisible());
+        QCOMPARE(w.theme.name(), QString("Focus renamed"));
+        const auto file = w.path;
+        QVERIFY(QFile::copy(file, dir.path() + "/themes/custom/Existing.json"));
+        w.findChild<QToolButton *>("renameEditorTheme")->click();
+        editor->setText("Existing");
+        QTest::keyClick(editor, Qt::Key_Return);
+        QVERIFY(editor->isVisible());
+        QVERIFY(!QApplication::activeModalWidget());
+        QCOMPARE(w.path, file);
+        QTest::keyClick(editor, Qt::Key_Escape);
+        w.setPage(MainWindow::SettingsPage);
+        auto version = w.findChild<QLabel *>("applicationVersion");
+        QVERIFY(version && version->text().contains(QStringLiteral(SCREEN_VERSION)));
+        for (auto scroll : w.findChildren<QScrollArea *>())
+            if (scroll->isAncestorOf(version)) scroll->ensureWidgetVisible(version);
+        QCoreApplication::processEvents();
+        capture("settings-version");
+        w.setPage(MainWindow::EditorPage);
+        w.findChild<QToolButton *>("renameEditorTheme")->click();
+        QVERIFY(editor->isVisible());
+        w.quitting = true;
+        w.close(); // Closing with an active editor must not call into a destroyed document.
+        QCoreApplication::processEvents();
+    }
     void bundledUiPalettesSwitchAndSurviveLightweightMode() {
         TestProfile dir;
         const auto restore = qScopeGuard([&] { UiAppearance::instance().apply("system", dir.path()); });
@@ -1683,6 +1979,227 @@ private slots:
         QVERIFY(w.dataState->mapTo(&w, QPoint()).x() > w.width() / 2);
         QVERIFY2(unexpectedDialog.isEmpty(), qPrintable(unexpectedDialog));
     }
+    void drawnShapesAppearAtTheirSelectionImmediately_data() {
+        QTest::addColumn<QString>("kind");
+        QTest::addColumn<double>("zoom");
+        QTest::addColumn<bool>("mirroredGroup");
+        for (const auto kind : {QString("rectangle"), QString("ellipse"), QString("line")}) {
+            QTest::newRow(qPrintable(kind + "-actual-size")) << kind << 1.0 << false;
+            QTest::newRow(qPrintable(kind + "-zoomed-mirrored-group")) << kind << 1.35 << true;
+        }
+    }
+    void drawnShapesAppearAtTheirSelectionImmediately() {
+        QFETCH(QString, kind);
+        QFETCH(double, zoom);
+        QFETCH(bool, mirroredGroup);
+        TestProfile dir;
+        MainWindow w(dir.path());
+        const auto close = qScopeGuard([&] { w.dirty = false; w.quitting = true; });
+        w.sampling.stop();
+        w.theme.data["layers"] = QJsonArray{};
+        w.theme.data["background_color"] = rgba(Qt::black);
+        QString parent;
+        if (mirroredGroup) {
+            auto group = newLayer("group", "Drawing group");
+            group["x"] = 170; group["y"] = 120;
+            parent = group["id"].toString();
+            w.theme.data["layers"] = QJsonArray{group};
+        }
+        w.config["mirror"] = mirroredGroup;
+        w.render();
+        w.setEditing(true); w.show();
+        w.canvas->setZoom(zoom);
+        w.canvas->snap = false;
+        w.selection(parent.isEmpty() ? QStringList{} : QStringList{parent});
+        w.undoHistory.clear(); w.redoHistory.clear();
+        QCoreApplication::processEvents();
+        auto action = w.findChild<QAction *>("editorTool_" + kind);
+        QVERIFY(action); action->trigger();
+        const QPointF start(123.25, 92.75), end(231.75, 165.25);
+        const auto viewportPoint = [&](QPointF point) {
+            if (mirroredGroup) point.setX(w.theme.size().width() - point.x());
+            return w.canvas->screenRect().topLeft() + point * zoom;
+        };
+        const auto mouse = [&](QEvent::Type type, QPointF point, Qt::MouseButtons buttons) {
+            QMouseEvent event(type, point, QPointF(w.canvas->mapToGlobal(point.toPoint())),
+                type == QEvent::MouseMove ? Qt::NoButton : Qt::LeftButton, buttons, Qt::NoModifier);
+            QApplication::sendEvent(w.canvas, &event);
+        };
+        mouse(QEvent::MouseButtonPress, viewportPoint(start), Qt::LeftButton);
+        mouse(QEvent::MouseMove, viewportPoint(end), Qt::LeftButton);
+        mouse(QEvent::MouseButtonRelease, viewportPoint(end), Qt::NoButton);
+        QCOMPARE(w.selection().size(), 1);
+        const auto id = w.selection().first();
+        const auto shape = findLayer(w.theme.layers(), id);
+        QCOMPARE(shape["kind"].toString(), kind);
+        QCOMPARE(parentOf(w.theme.layers(), id), parent);
+        const auto position = absolutePosition(w.theme.layers(), id);
+        const auto paintedBounds = [](const QImage &image) {
+            QRect bounds;
+            for (int y = 0; y < image.height(); ++y)
+                for (int x = 0; x < image.width(); ++x)
+                    if (image.pixelColor(x, y) != QColor(Qt::black)) bounds |= QRect(x, y, 1, 1);
+            return bounds;
+        };
+        const auto firstFrame = w.frame;
+        const auto bounds = paintedBounds(firstFrame);
+        QVERIFY2(qAbs(bounds.left() - position.x()) <= 1 && qAbs(bounds.top() - position.y()) <= 1,
+            qPrintable(QString("painted=(%1,%2), selected=(%3,%4)")
+                .arg(bounds.x()).arg(bounds.y()).arg(position.x()).arg(position.y())));
+        QVERIFY(qAbs(position.x() - start.x()) <= .5 && qAbs(position.y() - start.y()) <= .5);
+        QVERIFY(qAbs(shape["w"].toDouble() - (end.x() - start.x())) <= .5);
+        QVERIFY(qAbs(shape["h"].toDouble() - (end.y() - start.y())) <= .5);
+        // Antialiasing and a line's square caps extend beyond its endpoints.
+        const int edgeAllowance = kind == "line" ? 3 : 2;
+        QVERIFY(qAbs(bounds.width() - shape["w"].toDouble()) <= edgeAllowance);
+        QVERIFY(qAbs(bounds.height() - shape["h"].toDouble()) <= edgeAllowance);
+        QCOMPARE(w.xBox->value(), qRound(shape["x"].toDouble()));
+        QCOMPARE(w.yBox->value(), qRound(shape["y"].toDouble()));
+        QCOMPARE(w.wBox->value(), qRound(shape["w"].toDouble()));
+        QCOMPARE(w.hBox->value(), qRound(shape["h"].toDouble()));
+        const auto shots = qEnvironmentVariable("TURING_SHAPE_UI_SHOTS");
+        if (!shots.isEmpty()) {
+            QDir().mkpath(shots);
+            w.grab().save(shots + '/' + kind + (mirroredGroup ? "-group.png" : "-root.png"));
+        }
+        QTest::keyClick(w.canvas, Qt::Key_Right);
+        QCOMPARE(paintedBounds(w.frame), bounds.translated(1, 0));
+        w.undo(); QCOMPARE(w.frame, firstFrame);
+        w.undo(); QVERIFY(findLayer(w.theme.layers(), id).isEmpty());
+        QVERIFY(paintedBounds(w.frame).isEmpty());
+        w.redo(); QCOMPARE(w.frame, firstFrame);
+    }
+    void lineToolPreviewsAndKeepsDraggedEndpoints_data() {
+        QTest::addColumn<QPointF>("first");
+        QTest::addColumn<QPointF>("last");
+        QTest::addColumn<bool>("mirroredGroup");
+        const QList<QPair<QPointF, QPointF>> segments{
+            {{70, 220}, {280, 60}}, {{70, 60}, {280, 220}},
+            {{280, 220}, {70, 60}}, {{280, 60}, {70, 220}},
+            {{70, 130}, {280, 130}}, {{280, 130}, {70, 130}},
+            {{170, 60}, {170, 220}}, {{170, 220}, {170, 60}}};
+        int index = 0;
+        for (const auto &segment : segments) {
+            for (bool grouped : {false, true})
+                QTest::newRow(qPrintable(QString("direction-%1-%2").arg(index).arg(grouped ? "mirrored-group" : "root")))
+                    << segment.first << segment.second << grouped;
+            ++index;
+        }
+    }
+    void lineToolPreviewsAndKeepsDraggedEndpoints() {
+        QFETCH(QPointF, first);
+        QFETCH(QPointF, last);
+        QFETCH(bool, mirroredGroup);
+        TestProfile dir;
+        MainWindow w(dir.path());
+        const auto close = qScopeGuard([&] { w.dirty = false; w.quitting = true; });
+        w.sampling.stop();
+        w.theme.data["layers"] = QJsonArray{};
+        w.theme.data["background_color"] = rgba(Qt::black);
+        QString parent;
+        if (mirroredGroup) {
+            auto group = newLayer("group", "Drawing group");
+            group["x"] = 170; group["y"] = 120;
+            parent = group["id"].toString();
+            w.theme.data["layers"] = QJsonArray{group};
+        }
+        w.config["mirror"] = mirroredGroup;
+        w.render(); w.setEditing(true); w.show();
+        w.canvas->setZoom(mirroredGroup ? 1.35 : 1);
+        w.canvas->snap = false;
+        w.selection(parent.isEmpty() ? QStringList{} : QStringList{parent});
+        w.undoHistory.clear(); w.redoHistory.clear();
+        QCoreApplication::processEvents();
+        w.findChild<QAction *>("editorTool_line")->trigger();
+        const auto viewPoint = [&](QPointF point) {
+            if (mirroredGroup) point.setX(w.theme.size().width() - point.x());
+            return w.canvas->screenRect().topLeft() + point * w.canvas->zoom();
+        };
+        const auto mouse = [&](QEvent::Type type, QPointF point, Qt::MouseButtons buttons) {
+            const auto position = viewPoint(point);
+            QMouseEvent event(type, position, QPointF(w.canvas->mapToGlobal(position.toPoint())),
+                type == QEvent::MouseMove ? Qt::NoButton : Qt::LeftButton, buttons, Qt::NoModifier);
+            QApplication::sendEvent(w.canvas, &event);
+        };
+        const auto before = w.theme.data;
+        const auto blank = w.frame;
+        mouse(QEvent::MouseButtonPress, first, Qt::LeftButton);
+        for (const auto endpoint : {(first + last) / 2., last}) {
+            mouse(QEvent::MouseMove, endpoint, Qt::LeftButton);
+            QCOMPARE(w.theme.data, before);
+            QCOMPARE(w.frame, blank); // The drag preview must not commit partial layers.
+            const auto preview = w.canvas->grab();
+            const auto pixels = preview.toImage();
+            const auto middle = (viewPoint((first + endpoint) / 2.) * preview.devicePixelRatio()).toPoint();
+            bool visibleLine = false;
+            for (int y = middle.y() - 2; y <= middle.y() + 2; ++y)
+                for (int x = middle.x() - 2; x <= middle.x() + 2; ++x) {
+                    if (!pixels.rect().contains(x, y)) continue;
+                    const auto color = pixels.pixelColor(x, y);
+                    visibleLine |= color.green() > 80 && color.blue() > color.red();
+                }
+            QVERIFY(visibleLine);
+            if (first.x() != endpoint.x() && first.y() != endpoint.y()) {
+                const auto corner = (viewPoint(QPointF(first.x(), endpoint.y())) * preview.devicePixelRatio()).toPoint();
+                QCOMPARE(pixels.pixelColor(corner), QColor(Qt::black)); // No marquee rectangle.
+            }
+        }
+        const auto shots = qEnvironmentVariable("TURING_LINE_UI_SHOTS");
+        if (!shots.isEmpty()) {
+            QDir().mkpath(shots);
+            w.canvas->grab().save(shots + '/' + QString::fromLatin1(QTest::currentDataTag()) + "-preview.png");
+        }
+        mouse(QEvent::MouseButtonRelease, last, Qt::NoButton);
+        QCOMPARE(w.selection().size(), 1);
+        const auto id = w.selection().first();
+        QCOMPARE(parentOf(w.theme.layers(), id), parent);
+        auto line = findLayer(w.theme.layers(), id);
+        QCOMPARE(line["kind"].toString(), QString("line"));
+        QCOMPARE(w.wBox->value(), qAbs(qRound(last.x() - first.x())));
+        QCOMPARE(w.hBox->value(), qAbs(qRound(last.y() - first.y())));
+        auto expected = blank;
+        {
+            QPainter painter(&expected);
+            painter.setRenderHint(QPainter::Antialiasing);
+            painter.setPen(QPen(color(line["stroke"]), line["stroke_width"].toInt(1)));
+            painter.drawLine(first, last);
+        }
+        QCOMPARE(w.frame, expected);
+        if (!shots.isEmpty()) w.canvas->grab().save(shots + '/' + QString::fromLatin1(QTest::currentDataTag()) + "-finished.png");
+        const auto file = dir.path() + "/line.json";
+        w.theme.save(file);
+        Renderer renderer;
+        QCOMPARE(renderer.render(Theme::load(file), {}), expected);
+        w.undo(); QCOMPARE(w.frame, blank);
+        w.redo(); QCOMPARE(w.frame, expected);
+        w.selection({id});
+        const auto completed = w.theme.data;
+        mouse(QEvent::MouseButtonPress, QPointF(320, 150), Qt::LeftButton);
+        mouse(QEvent::MouseMove, QPointF(390, 90), Qt::LeftButton);
+        QTest::keyClick(w.canvas, Qt::Key_Escape);
+        mouse(QEvent::MouseButtonRelease, QPointF(390, 90), Qt::NoButton);
+        QCOMPARE(w.theme.data, completed);
+        mouse(QEvent::MouseButtonPress, first, Qt::LeftButton);
+        mouse(QEvent::MouseButtonRelease, first, Qt::NoButton);
+        QCOMPARE(w.theme.data, completed); // A click alone must not leave an empty layer.
+        if (!mirroredGroup && first == QPointF(70, 220) && last == QPointF(280, 60)) {
+            w.findChild<QAction *>("editorTool_move")->trigger();
+            dragCanvas(*w.canvas, last, {320, 250});
+            line = findLayer(w.theme.layers(), id);
+            const auto moved = layerLine(line).translated(absolutePosition(w.theme.layers(), id));
+            QCOMPARE(moved.p1(), first);
+            QCOMPARE(moved.p2(), QPointF(320, 250));
+            QVERIFY(!line["line_rising"].toBool());
+            dragCanvas(*w.canvas, first, {120, 280});
+            line = findLayer(w.theme.layers(), id);
+            const auto reversed = layerLine(line).translated(absolutePosition(w.theme.layers(), id));
+            QCOMPARE(reversed.p1(), QPointF(120, 280));
+            QCOMPARE(reversed.p2(), QPointF(320, 250));
+            QVERIFY(line["line_rising"].toBool());
+            dragCanvas(*w.canvas, {220, 265}, {232, 273});
+            QCOMPARE(absolutePosition(w.theme.layers(), id), QPointF(132, 258));
+        }
+    }
     void editorToolsAndLayerFooterKeepActionsAccessible() {
         TestProfile dir;
         MainWindow w(dir.path());
@@ -1691,6 +2208,10 @@ private slots:
         auto tools = w.findChild<QToolBar *>("editorTools");
         auto footer = w.findChild<QToolBar *>("layerTools");
         QVERIFY(tools && footer);
+        QCOMPARE(footer->actions().first()->objectName(), QString("layer_new"));
+        auto create = w.findChild<QToolButton *>("layerNew");
+        QVERIFY(create && create->menu() && create->menu()->actions().size() == 9);
+        QVERIFY(footer->actions().contains(w.layerActions["cut"]));
         QCOMPARE(tools->orientation(), Qt::Vertical);
         QCOMPARE(tools->toolButtonStyle(), Qt::ToolButtonIconOnly);
         QTRY_VERIFY(tools->mapTo(&w, tools->rect().topRight()).x() < w.canvas->mapTo(&w, QPoint()).x());
@@ -1742,13 +2263,14 @@ private slots:
             auto menu = w.findChild<QMenu *>("layerContextMenu");
             QVERIFY(menu);
             const auto close = qScopeGuard([&] { menu->close(); });
-            QCOMPARE(menu->actions().first(), w.layerActions["properties"]);
+            QCOMPARE(menu->actions().first(), w.layerActions["cut"]);
+            QCOMPARE(menu->actions().last(), w.layerActions["properties"]);
             const auto actions = menu->actions();
             QCOMPARE(std::count_if(actions.begin(), actions.end(), [](QAction *a) { return a->isSeparator(); }), 4);
             auto arrange = menu->findChild<QMenu *>("layerArrangeMenu");
             QVERIFY(arrange && arrange->isEnabled());
-            QVERIFY(menu->actions().last()->menu());
-            QCOMPARE(menu->actions().last()->menu()->actions().size(), 9);
+            auto create = menu->findChild<QMenu *>("layerContextNewMenu");
+            QVERIFY(create && create->actions().size() == 9);
             inspected = true;
         });
         w.contextMenu(w.tree->mapToGlobal(QPoint(20, 40)));
@@ -1771,6 +2293,681 @@ private slots:
             });
             w.contextMenu(w.tree->mapToGlobal(QPoint(20, 40)));
         }
+    }
+    void shapeStrokePropertiesRenderPersistAndUndo_data() {
+        QTest::addColumn<QString>("kind");
+        QTest::newRow("line") << QString("line");
+        QTest::newRow("rectangle") << QString("rectangle");
+        QTest::newRow("ellipse") << QString("ellipse");
+    }
+    void shapeStrokePropertiesRenderPersistAndUndo() {
+        QFETCH(QString, kind);
+        TestProfile dir;
+        const auto restore = qScopeGuard([&] { UiAppearance::instance().apply("system", dir.path()); });
+        MainWindow w(dir.path());
+        const auto close = qScopeGuard([&] { w.dirty = false; w.quitting = true; });
+        w.sampling.stop();
+        auto shape = newLayer(kind, kind);
+        shape["x"] = 60; shape["y"] = kind == "line" ? 100 : 60;
+        shape["w"] = 160; shape["h"] = kind == "line" ? 0 : 80;
+        shape["fill"] = rgba(Qt::green); shape["stroke"] = rgba(Qt::blue);
+        const auto id = shape["id"].toString();
+        w.theme.data = QJsonObject{{"format", "turing-screen-qt"}, {"version", 1},
+            {"name", "Stroke test"}, {"landscape", true},
+            {"background_color", rgba(Qt::black)}, {"layers", QJsonArray{shape}}};
+        w.setEditing(true); w.render(); w.selection({id}); w.show();
+        w.inspectorTabs->setCurrentIndex(1);
+        QCoreApplication::processEvents();
+        QVERIFY(w.strokeOptions->isVisible());
+        QCOMPARE(w.strokeEnabledBox->isVisible(), kind != "line");
+        QVERIFY(w.strokeWidthBox->isEnabled() && w.strokeColor->isEnabled());
+        QCOMPARE(w.strokeWidthBox->value(), 1);
+        if (kind != "line") {
+            QCoreApplication::processEvents();
+            QCOMPARE(w.fillColor->mapTo(w.right, QPoint()).x(), w.strokeWidthLabel->mapTo(w.right, QPoint()).x());
+            QCOMPARE(w.fillColor->width(), w.fillOptions->width());
+            QVERIFY(w.fillColor->width() > w.strokeColor->width());
+        }
+        const auto thin = w.frame;
+        w.undoHistory.clear(); w.redoHistory.clear();
+        QVERIFY(QMetaObject::invokeMethod(w.strokeWidthBox, "editingFinished"));
+        QVERIFY(w.undoHistory.isEmpty()); // Focusing the control alone does not edit the theme.
+        w.strokeWidthBox->setValue(8);
+        QVERIFY(QMetaObject::invokeMethod(w.strokeWidthBox, "editingFinished"));
+        QCOMPARE(findLayer(w.theme.layers(), id)["stroke_width"].toInt(), 8);
+        QVERIFY(w.frame != thin);
+        const auto thick = w.frame;
+        const QPoint borderPoint(140, kind == "line" ? 97 : 56);
+        QCOMPARE(thick.pixelColor(borderPoint), QColor(Qt::blue));
+        if (kind == "line") {
+            QCOMPARE(thick.pixelColor(140, 94), QColor(Qt::black));
+            QCOMPARE(thick.pixelColor(140, 102), QColor(Qt::blue));
+        } else {
+            QCOMPARE(thick.pixelColor(140, 100), QColor(Qt::green));
+            QCOMPARE(thick.pixelColor(140, 62), QColor(Qt::green)); // The border stays outside the fill.
+        }
+        w.undo(); QCOMPARE(w.frame, thin);
+        w.redo(); QCOMPARE(w.frame, thick);
+        w.selection({id});
+        const bool nativeDialogsDisabled = qApp->testAttribute(Qt::AA_DontUseNativeDialogs);
+        qApp->setAttribute(Qt::AA_DontUseNativeDialogs, true);
+        const auto restoreDialogs = qScopeGuard([&] { qApp->setAttribute(Qt::AA_DontUseNativeDialogs, nativeDialogsDisabled); });
+        const QColor pink("#f05080");
+        bool colorDialogShown = false;
+        QTimer::singleShot(0, &w, [&] {
+            auto dialog = w.findChild<QColorDialog *>();
+            QVERIFY(dialog);
+            colorDialogShown = true;
+            dialog->setCurrentColor(pink);
+            dialog->accept();
+        });
+        w.strokeColor->click();
+        QVERIFY(colorDialogShown);
+        QCOMPARE(color(findLayer(w.theme.layers(), id)["stroke"]), pink);
+        QCOMPARE(w.frame.pixelColor(borderPoint), pink);
+        const auto colored = w.frame;
+        QTimer::singleShot(0, &w, [&] {
+            auto dialog = w.findChild<QColorDialog *>(); QVERIFY(dialog);
+            dialog->setCurrentColor(Qt::yellow); dialog->reject();
+        });
+        const auto historySize = w.undoHistory.size();
+        w.strokeColor->click();
+        QCOMPARE(w.frame, colored);
+        QCOMPARE(w.undoHistory.size(), historySize);
+        if (kind != "line") {
+            w.strokeEnabledBox->click();
+            QVERIFY(!w.strokeEnabledBox->isChecked());
+            QVERIFY(!w.strokeWidthBox->isEnabled() && !w.strokeColor->isEnabled());
+            QCOMPARE(w.frame.pixelColor(borderPoint), QColor(Qt::black));
+            const auto disabled = w.frame;
+            auto savedShape = findLayer(w.theme.layers(), id);
+            QCOMPARE(savedShape["stroke_width"].toInt(), 8);
+            QCOMPARE(color(savedShape["stroke"]), pink);
+            const auto offFile = dir.path() + "/border-off.json";
+            w.theme.save(offFile);
+            Renderer renderer;
+            QCOMPARE(renderer.render(Theme::load(offFile), w.sample), disabled);
+            w.undo(); QCOMPARE(w.frame, colored);
+            w.redo(); QCOMPARE(w.frame, disabled);
+            w.selection({id}); w.strokeEnabledBox->click();
+            QCOMPARE(w.frame, colored);
+        } else {
+            // A thick line can be selected at its visible edge when zoomed in.
+            w.inspectorTabs->setCurrentIndex(0);
+            w.canvas->setZoom(1.5); w.selection({});
+            QTest::mouseClick(w.canvas, Qt::LeftButton, Qt::NoModifier, canvasPoint(*w.canvas, {140, 103}));
+            QCOMPARE(w.selection(), QStringList{id});
+            w.inspectorTabs->setCurrentIndex(1);
+        }
+        const auto file = dir.path() + "/stroke.json";
+        w.theme.save(file);
+        Renderer renderer;
+        QCOMPARE(renderer.render(Theme::load(file), w.sample), colored);
+        // Locked objects and unrelated components do not expose editable stroke controls.
+        w.mutate([&](Theme &t) { auto a = t.layers(); updateLayer(a, id, [](QJsonObject &o) { o["locked"] = true; }); t.data["layers"] = a; });
+        QVERIFY(!w.strokeWidthBox->isEnabled() && !w.strokeColor->isEnabled() && !w.strokeEnabledBox->isEnabled());
+        const auto locked = w.theme.data;
+        w.strokeWidthBox->setValue(12);
+        QVERIFY(QMetaObject::invokeMethod(w.strokeWidthBox, "editingFinished"));
+        QCOMPARE(w.theme.data, locked);
+        w.mutate([&](Theme &t) { auto a = t.layers(); updateLayer(a, id, [](QJsonObject &o) { o["locked"] = false; }); t.data["layers"] = a; });
+        const auto shots = qEnvironmentVariable("TURING_STROKE_UI_SHOTS");
+        if (!shots.isEmpty()) {
+            w.english = false; w.build(); w.setEditing(true); w.selection({id});
+            w.selectUiTheme("catppuccin-macchiato");
+            w.inspectorTabs->setCurrentIndex(1); w.resize(1280, 820);
+            QCoreApplication::processEvents();
+            QTRY_COMPARE(w.editorSplit->orientation(), Qt::Horizontal);
+            w.editorSplit->setSizes({720, 300});
+            QTest::qWait(20);
+            QDir().mkpath(shots);
+            QVERIFY(w.right->grab().save(shots + "/" + kind + "-properties.png"));
+            QVERIFY(w.grab().save(shots + "/" + kind + "-editor.png"));
+            QVERIFY(w.frame.save(shots + "/" + kind + "-render.png"));
+        }
+        w.selection({}); QVERIFY(w.strokeOptions->isHidden());
+        auto text = newLayer("text", "Text");
+        w.theme.data["layers"] = QJsonArray{text}; w.selection({text["id"].toString()});
+        QVERIFY(w.strokeOptions->isVisible());
+        QVERIFY(!w.strokeEnabledBox->isChecked());
+        if (kind != "line") {
+            // Legacy themes use zero width for a disabled border.
+            shape["stroke_width"] = 0;
+            w.theme.data["layers"] = QJsonArray{shape}; w.render(); w.selection({id});
+            QVERIFY(!w.strokeEnabledBox->isChecked());
+            const auto legacy = w.theme.data;
+            QVERIFY(QMetaObject::invokeMethod(w.strokeWidthBox, "editingFinished"));
+            QCOMPARE(w.theme.data, legacy);
+            w.strokeEnabledBox->click();
+            QVERIFY(w.strokeEnabledBox->isChecked());
+            QCOMPARE(findLayer(w.theme.layers(), id)["stroke_width"].toInt(), 1);
+        }
+    }
+    void textAndSensorStylesHaveSwatchesAndOrderedProperties_data() {
+        QTest::addColumn<QString>("kind");
+        QTest::newRow("text") << QString("text");
+        QTest::newRow("sensor") << QString("sensor");
+    }
+    void textAndSensorStylesHaveSwatchesAndOrderedProperties() {
+        QFETCH(QString, kind);
+        TestProfile dir;
+        const auto restore = qScopeGuard([&] { UiAppearance::instance().apply("system", dir.path()); });
+        MainWindow w(dir.path());
+        const auto close = qScopeGuard([&] { w.dirty = false; w.quitting = true; });
+        w.sampling.stop();
+        auto layer = newLayer(kind, "Sample text", kind == "sensor" ? "CpuLoad" : "");
+        layer["x"] = 60; layer["y"] = 60; layer["w"] = 160; layer["h"] = 80;
+        const auto id = layer["id"].toString();
+        w.theme.data = QJsonObject{{"format", "turing-screen-qt"}, {"version", 1}, {"name", "Text box"},
+            {"landscape", true}, {"background_color", rgba(Qt::black)}, {"layers", QJsonArray{layer}}};
+        w.sample.values["CpuLoad"] = 75;
+        w.setEditing(true); w.render(); w.selection({id}); w.show();
+        w.inspectorTabs->setCurrentIndex(1); w.resize(1280, 820);
+        QTRY_COMPARE(w.editorSplit->orientation(), Qt::Horizontal);
+        QVERIFY(w.strokeOptions->isVisible() && !w.strokeEnabledBox->isChecked());
+        QVERIFY(w.fontColor->isEnabled());
+        QVERIFY(!w.fillColor->isVisible() && !w.fillColor->isEnabled());
+        const auto original = w.frame;
+        QCOMPARE(original.pixelColor(150, 120), QColor(Qt::black));
+        const bool nativeDialogsDisabled = qApp->testAttribute(Qt::AA_DontUseNativeDialogs);
+        qApp->setAttribute(Qt::AA_DontUseNativeDialogs, true);
+        const auto restoreDialogs = qScopeGuard([&] { qApp->setAttribute(Qt::AA_DontUseNativeDialogs, nativeDialogsDisabled); });
+        const auto pickColor = [&](QPushButton *button, QColor color) {
+            QTimer::singleShot(0, &w, [&w, color] {
+                auto dialog = w.findChild<QColorDialog *>(); QVERIFY(dialog);
+                dialog->setCurrentColor(color); dialog->accept();
+            });
+            button->click();
+        };
+        const auto swatch = [](QPushButton *button) {
+            return button->icon().pixmap(QSize(20, 16), QIcon::Normal).toImage().pixelColor(10, 8);
+        };
+        const QColor ink("#ffcc44"), border("#f05080");
+        w.undoHistory.clear(); w.redoHistory.clear();
+        pickColor(w.fontColor, ink);
+        QCOMPARE(color(findLayer(w.theme.layers(), id)["font"].toObject()["color"]), ink);
+        QCOMPARE(swatch(w.fontColor), ink);
+        QVERIFY(w.frame != original);
+        int solidGlyphPixels = 0;
+        for (int y = 60; y < 100; ++y)
+            for (int x = 60; x < 220; ++x)
+                if (original.pixelColor(x, y) == QColor(Qt::white)) {
+                    QCOMPARE(w.frame.pixelColor(x, y), ink); ++solidGlyphPixels;
+                }
+        QVERIFY(solidGlyphPixels > 0);
+        w.strokeEnabledBox->click();
+        w.strokeWidthBox->setValue(6);
+        QVERIFY(QMetaObject::invokeMethod(w.strokeWidthBox, "editingFinished"));
+        pickColor(w.strokeColor, border);
+        QCOMPARE(w.frame.pixelColor(57, 110), border);
+        QCOMPARE(w.frame.pixelColor(62, 110), QColor(Qt::black));
+        QCOMPARE(w.frame.pixelColor(150, 120), QColor(Qt::black));
+        QCOMPARE(swatch(w.strokeColor), border);
+        const auto styled = w.frame;
+        const auto file = dir.path() + "/styled-text.json";
+        w.theme.save(file);
+        Renderer reference;
+        QCOMPARE(reference.renderFull(Theme::load(file), w.sample), styled);
+        w.strokeEnabledBox->click();
+        QCOMPARE(w.frame.pixelColor(57, 110), QColor(Qt::black));
+        w.undo(); QCOMPARE(w.frame, styled); w.selection({id});
+        const auto shots = qEnvironmentVariable("TURING_TEXT_BOX_UI_SHOTS");
+        for (bool english : {false, true}) {
+            w.english = english; w.build(); w.setEditing(true); w.selection({id});
+            w.selectUiTheme("catppuccin-macchiato");
+            w.inspectorTabs->setCurrentIndex(1);
+            for (int width : {280, 340}) {
+                w.inspectorTabs->setFixedWidth(width);
+                QTest::qWait(20);
+                const auto top = [&](QWidget *widget) { return widget->mapTo(w.right, QPoint()).y(); };
+                QVERIFY(top(w.strokeColor) + w.strokeColor->height() <= top(w.fontColor));
+                QVERIFY(top(w.fontColor) + w.fontColor->height() <= top(w.visibleBox));
+                QVERIFY(qAbs(top(w.strokeWidthBox) + w.strokeWidthBox->height() / 2. - top(w.strokeColor) - w.strokeColor->height() / 2.) <= 1);
+                QVERIFY(qAbs(top(w.fontBox) + w.fontBox->height() / 2. - top(w.fontColor) - w.fontColor->height() / 2.) <= 1);
+                QCOMPARE(w.strokeColor->mapTo(w.right, QPoint()).x(), w.fontColor->mapTo(w.right, QPoint()).x());
+                QCOMPARE(w.strokeColor->width(), w.fontColor->width());
+                const int minimalColorWidth = qMax(w.fontColor->sizeHint().width(), w.strokeColor->sizeHint().width());
+                QCOMPARE(w.fontColor->width(), minimalColorWidth);
+                const auto inputX = w.layerName->mapTo(w.right, QPoint()).x();
+                for (auto widget : QList<QWidget *>{w.xBox, w.wBox, w.fontBox, w.strokeWidthBox})
+                    QCOMPARE(widget->mapTo(w.right, QPoint()).x(), inputX);
+                const auto labelX = w.propertyForm->labelForField(w.layerName)->mapTo(w.right, QPoint()).x();
+                QCOMPARE(w.strokeWidthLabel->mapTo(w.right, QPoint()).x(), labelX);
+                QCOMPARE(w.propertyForm->labelForField(w.fontOptions)->mapTo(w.right, QPoint()).x(), labelX);
+                QVERIFY(!w.fillColor->isVisible());
+                QVERIFY(qAbs(top(w.visibleBox) - top(w.lockedBox)) <= 1);
+                auto scroll = qobject_cast<QScrollArea *>(w.inspectorTabs->widget(1)); QVERIFY(scroll);
+                QCOMPARE(scroll->horizontalScrollBar()->maximum(), 0);
+                QVERIFY(w.strokeWidthBox->width() >= 40);
+                if (!shots.isEmpty() && !english && width == 340) {
+                    QDir().mkpath(shots);
+                    QVERIFY(w.right->grab().save(shots + "/" + kind + "-properties.png"));
+                    QVERIFY(w.frame.save(shots + "/" + kind + "-render.png"));
+                }
+            }
+        }
+        w.mutate([&](Theme &t) { auto a = t.layers(); updateLayer(a, id, [](QJsonObject &o) { o["locked"] = true; }); t.data["layers"] = a; });
+        QVERIFY(!w.fontColor->isEnabled() && !w.fillColor->isEnabled() && !w.strokeColor->isEnabled());
+    }
+    void numericPropertiesUpdateLiveAndUnsupportedPropertiesAreHidden() {
+        TestProfile dir;
+        MainWindow w(dir.path());
+        const auto close = qScopeGuard([&] { w.dirty = false; w.quitting = true; });
+        w.sampling.stop(); w.setEditing(true); w.show(); w.inspectorTabs->setCurrentIndex(1);
+        w.theme.data = QJsonObject{{"format", "turing-screen-qt"}, {"version", 1}, {"name", "Live properties"},
+            {"landscape", true}, {"background_color", rgba(Qt::black)}};
+        for (const auto &kind : {QString("rectangle"), QString("ellipse"), QString("line"), QString("text"),
+                                QString("sensor"), QString("image"), QString("bar"), QString("arc"), QString("group")}) {
+            auto layer = newLayer(kind, "Sample", "CpuLoad");
+            w.theme.data["layers"] = QJsonArray{layer};
+            w.selection({layer["id"].toString()}); QCoreApplication::processEvents();
+            const bool text = kind == "text" || kind == "sensor";
+            const bool shape = kind == "rectangle" || kind == "ellipse" || text;
+            QCOMPARE(w.layerText->isVisible(), kind == "text");
+            QCOMPARE(w.bindingBox->isVisible(), kind == "sensor" || kind == "bar" || kind == "arc");
+            QCOMPARE(w.fontBox->isVisible(), text);
+            QCOMPARE(w.fontColor->isVisible(), text);
+            QCOMPARE(w.strokeColor->isVisible(), shape || kind == "line");
+            QCOMPARE(w.fillColor->isVisible(), kind == "rectangle" || kind == "ellipse" || kind == "bar" || kind == "arc");
+            QCOMPARE(w.wBox->isVisible(), kind != "group" && kind != "arc");
+            QCOMPARE(w.hBox->isVisible(), w.wBox->isVisible());
+            QVERIFY(w.visibleBox->isVisible() && w.lockedBox->isVisible());
+        }
+        auto rect = newLayer("rectangle", "Rectangle");
+        rect["x"] = 60; rect["y"] = 60; rect["w"] = 160; rect["h"] = 80;
+        rect["fill"] = rgba(Qt::green); rect["stroke"] = rgba(Qt::blue);
+        const auto id = rect["id"].toString();
+        w.theme.data["layers"] = QJsonArray{rect}; w.render(); w.selection({id});
+        w.strokeWidthBox->setFocus(); w.strokeWidthBox->setValue(10);
+        QCOMPARE(findLayer(w.theme.layers(), id)["stroke_width"].toInt(), 10);
+        QCOMPARE(w.frame.pixelColor(55, 100), QColor(Qt::blue));
+        QCOMPARE(w.frame.pixelColor(62, 100), QColor(Qt::green));
+        QVERIFY(w.strokeWidthBox->hasFocus());
+        w.xBox->setFocus(); w.xBox->selectAll();
+        QTest::keyClicks(w.xBox, "1"); QCOMPARE(findLayer(w.theme.layers(), id)["x"].toInt(), 1);
+        QTest::keyClicks(w.xBox, "2"); QCOMPARE(findLayer(w.theme.layers(), id)["x"].toInt(), 12);
+        QTest::keyClicks(w.xBox, "3"); QCOMPARE(findLayer(w.theme.layers(), id)["x"].toInt(), 123);
+        QVERIFY(w.xBox->hasFocus());
+        w.yBox->setValue(110);
+        QCOMPARE(findLayer(w.theme.layers(), id)["y"].toInt(), 110);
+        w.wBox->setValue(180); w.hBox->setValue(90);
+        QCOMPARE(findLayer(w.theme.layers(), id)["w"].toInt(), 180);
+        QCOMPARE(findLayer(w.theme.layers(), id)["h"].toInt(), 90);
+        QCOMPARE(w.frame.pixelColor(300, 195), QColor(Qt::green));
+        w.selection({});
+        QTest::mouseClick(w.canvas, Qt::LeftButton, Qt::NoModifier, canvasPoint(*w.canvas, {118, 150}));
+        QCOMPARE(w.selection(), QStringList{id}); // The outside border is selectable.
+        auto text = newLayer("text", "Sample");
+        const auto textId = text["id"].toString();
+        w.theme.data["layers"] = QJsonArray{text}; w.render(); w.selection({textId});
+        const auto small = w.frame;
+        w.fontBox->setFocus(); w.fontBox->setValue(36);
+        QCOMPARE(findLayer(w.theme.layers(), textId)["font"].toObject()["size"].toInt(), 36);
+        QVERIFY(w.frame != small && w.fontBox->hasFocus());
+        auto line = newLayer("line", "Line");
+        setLayerLine(line, QLineF(80, 100, 240, 100));
+        const auto lineId = line["id"].toString();
+        w.theme.data["layers"] = QJsonArray{line}; w.render(); w.selection({lineId});
+        w.strokeWidthBox->setFocus(); w.strokeWidthBox->setValue(12);
+        QCOMPARE(findLayer(w.theme.layers(), lineId)["stroke_width"].toInt(), 12);
+        QCOMPARE(w.frame.pixelColor(160, 96), color(line["stroke"]));
+        QVERIFY(w.strokeWidthBox->hasFocus());
+    }
+    void themeBackgroundActionsApplyClearAndPersist() {
+        TestProfile dir;
+        const auto restore = qScopeGuard([&] { UiAppearance::instance().apply("system", dir.path()); });
+        MainWindow w(dir.path());
+        const auto close = qScopeGuard([&] { w.dirty = false; w.quitting = true; });
+        w.sampling.stop(); w.setEditing(true); w.show();
+        w.selectUiTheme("catppuccin-macchiato");
+        auto foreground = newLayer("rectangle", "Foreground");
+        foreground["x"] = 100; foreground["y"] = 80;
+        foreground["w"] = 40; foreground["h"] = 30;
+        foreground["fill"] = rgba(Qt::green); foreground["stroke_width"] = 0;
+        w.theme.data["layers"] = QJsonArray{foreground};
+        w.theme.data["background_color"] = rgba(QColor("#112233"));
+        w.theme.data.remove("background");
+        w.render(); w.buildTree();
+        const auto layers = w.theme.layers();
+        const auto original = w.frame;
+        auto menu = w.findChild<QMenu *>("themeOptionsMenu");
+        auto set = menu->findChild<QAction *>("setThemeBackground");
+        auto clear = menu->findChild<QAction *>("clearThemeBackground");
+        QVERIFY(menu && set && clear && set->isEnabled());
+        QVERIFY(!w.findChild<QPushButton *>("themeBackgroundButton"));
+        auto exportPng = menu->findChild<QAction *>("exportThemePng");
+        QVERIFY(exportPng && exportPng->isEnabled());
+        for (auto button : w.right->findChildren<QPushButton *>()) {
+            QVERIFY(button->text() != "Background" && button->text() != QString::fromUtf8("背景图"));
+            QVERIFY(button->text() != "Export PNG" && button->text() != QString::fromUtf8("导出 PNG"));
+        }
+        QVERIFY(QMetaObject::invokeMethod(menu, "aboutToShow"));
+        QVERIFY(!clear->isEnabled());
+        QImage picture(2400, 1600, QImage::Format_RGB32);
+        picture.fill(QColor("#7842a2"));
+        const auto file = dir.path() + "/large-background.jpg";
+        QVERIFY(picture.save(file));
+        QString error;
+        QVERIFY2(w.setThemeBackground(file, error), qPrintable(error));
+        QCOMPARE(w.theme.layers(), layers);
+        QVERIFY(w.dirty);
+        const auto encoded = w.theme.data["background"].toString();
+        QVERIFY(!encoded.isEmpty());
+        const auto decoded = w.renderer.decode(encoded);
+        QCOMPARE(decoded.size(), w.theme.size());
+        QCOMPARE(w.frame.pixelColor(0, 0), decoded.pixelColor(0, 0));
+        QCOMPARE(w.frame.pixelColor(120, 95), QColor(Qt::green)); // The image stays behind components.
+        const auto applied = w.frame;
+        const bool nativeDialogsDisabled = qApp->testAttribute(Qt::AA_DontUseNativeDialogs);
+        qApp->setAttribute(Qt::AA_DontUseNativeDialogs, true);
+        const auto restoreDialogs = qScopeGuard([&] { qApp->setAttribute(Qt::AA_DontUseNativeDialogs, nativeDialogsDisabled); });
+        const auto png = dir.path() + "/export.png";
+        QTimer::singleShot(0, &w, [&] {
+            auto dialog = w.findChild<QFileDialog *>();
+            QVERIFY(dialog);
+            dialog->selectFile(png);
+            QVERIFY(QMetaObject::invokeMethod(dialog, "accept"));
+        });
+        exportPng->trigger();
+        QCOMPARE(QImage(png).convertToFormat(applied.format()), applied);
+        const auto theme = dir.path() + "/background-theme.json";
+        w.theme.save(theme);
+        Renderer renderer;
+        QCOMPARE(renderer.render(Theme::load(theme), w.sample), applied);
+        const auto state = w.theme.data;
+        QVERIFY(!w.setThemeBackground(dir.path() + "/missing.png", error));
+        QVERIFY(!error.isEmpty());
+        QCOMPARE(w.theme.data, state);
+        QCOMPARE(w.frame, applied);
+        QVERIFY(QMetaObject::invokeMethod(menu, "aboutToShow"));
+        QVERIFY(clear->isEnabled());
+        const auto shots = qEnvironmentVariable("TURING_BACKGROUND_UI_SHOTS");
+        if (!shots.isEmpty()) {
+            w.english = false; w.build(); w.setEditing(true);
+            menu = w.findChild<QMenu *>("themeOptionsMenu");
+            clear = menu->findChild<QAction *>("clearThemeBackground");
+            QDir().mkpath(shots);
+            QTimer::singleShot(0, &w, [&] { menu->grab().save(shots + "/theme-background-menu.png"); menu->close(); });
+            menu->exec(QPoint(50, 50));
+            w.grab().save(shots + "/theme-background-preview.png");
+        }
+        clear->trigger();
+        QVERIFY(!w.theme.data.contains("background"));
+        QCOMPARE(w.theme.layers(), layers);
+        QCOMPARE(w.frame, original);
+        w.undo(); QCOMPARE(w.frame, applied);
+        w.redo(); QCOMPARE(w.frame, original);
+        QVERIFY(QMetaObject::invokeMethod(menu, "aboutToShow"));
+        QVERIFY(!clear->isEnabled());
+    }
+    void imageShiftResizeUsesOriginalAspectAtEveryCorner_data() {
+        QTest::addColumn<QSize>("sourceSize");
+        QTest::addColumn<bool>("mirroredGroup");
+        QTest::newRow("landscape") << QSize(120, 80) << false;
+        QTest::newRow("portrait") << QSize(60, 120) << false;
+        QTest::newRow("landscape-mirrored-group") << QSize(120, 80) << true;
+        QTest::newRow("portrait-mirrored-group") << QSize(60, 120) << true;
+    }
+    void imageShiftResizeUsesOriginalAspectAtEveryCorner() {
+        QFETCH(QSize, sourceSize);
+        QFETCH(bool, mirroredGroup);
+        TestProfile dir;
+        MainWindow w(dir.path());
+        const auto close = qScopeGuard([&] { w.dirty = false; w.quitting = true; });
+        w.sampling.stop(); w.resize(1280, 820); w.show(); w.setEditing(true);
+        QImage picture(sourceSize, QImage::Format_RGB32); picture.fill(QColor("#ff5500"));
+        QByteArray bytes;
+        QBuffer buffer(&bytes); buffer.open(QIODevice::WriteOnly); QVERIFY(picture.save(&buffer, "PNG"));
+        auto image = newLayer("image", "Picture");
+        image["x"] = 80; image["y"] = 70;
+        image["w"] = sourceSize.width(); image["h"] = sourceSize.height();
+        image["data"] = QString::fromLatin1(bytes.toBase64());
+        const auto id = image["id"].toString();
+        auto group = newLayer("group", "Group");
+        group["x"] = 20; group["y"] = 15; group["children"] = QJsonArray{image};
+        w.theme.data = QJsonObject{{"format", "turing-screen-qt"}, {"version", 1}, {"name", "Image resize"},
+            {"landscape", true}, {"background_color", rgba(Qt::black)},
+            {"layers", mirroredGroup ? QJsonArray{group} : QJsonArray{image}}};
+        w.config["mirror"] = mirroredGroup;
+        w.canvas->mirrored = mirroredGroup;
+        w.canvas->setZoom(mirroredGroup ? 1.25 : 1.);
+        const auto rect = [&] {
+            const auto layer = findLayer(w.theme.layers(), id);
+            return layerBounds(layer).translated(absolutePosition(w.theme.layers(), id));
+        };
+        const auto cornerPoint = [](QRectF box, int corner) {
+            return QPointF(corner & 1 ? box.right() : box.left(), corner & 2 ? box.bottom() : box.top());
+        };
+        const auto aspectError = [&] {
+            const auto layer = findLayer(w.theme.layers(), id);
+            return qAbs(layer["w"].toInt() * sourceSize.height() - layer["h"].toInt() * sourceSize.width());
+        };
+        w.render(); w.canvas->tool = "move"; w.canvas->snap = false;
+        for (int corner = 0; corner < 4; ++corner) {
+            auto layers = w.theme.layers();
+            updateLayer(layers, id, [&](QJsonObject &o) { o = image; }); w.theme.data["layers"] = layers;
+            w.render(); w.selection({id}); w.undoHistory.clear(); w.redoHistory.clear();
+            const auto original = rect();
+            const auto anchor = cornerPoint(original, corner ^ 3);
+            const auto direction = QPointF(corner & 1 ? 1 : -1, corner & 2 ? 1 : -1);
+            const auto start = cornerPoint(original, corner);
+            dragCanvas(*w.canvas, start, start + QPointF(24 * direction.x(), 8 * direction.y()));
+            QVERIFY(aspectError() > qMax(sourceSize.width(), sourceSize.height())); // Free resize can stretch.
+            const auto stretched = w.theme.data;
+            const auto stretchedFrame = w.renderer.render(w.theme, w.sample);
+            const auto stretchedBox = rect();
+            const auto from = cornerPoint(stretchedBox, corner);
+            dragCanvas(*w.canvas, from, from + QPointF(12 * direction.x(), 20 * direction.y()), Qt::ShiftModifier);
+            QVERIFY(aspectError() <= qMax(sourceSize.width(), sourceSize.height()));
+            QVERIFY(QLineF(cornerPoint(rect(), corner ^ 3), anchor).length() <= 1);
+            QCOMPARE(w.undoHistory.size(), 2);
+            const auto proportional = w.theme.data;
+            w.undo(); QCOMPARE(w.theme.data, stretched); QCOMPARE(w.frame, stretchedFrame);
+            w.redo(); QCOMPARE(w.theme.data, proportional); w.selection({id});
+            const auto larger = rect();
+            const auto shrinkFrom = cornerPoint(larger, corner);
+            dragCanvas(*w.canvas, shrinkFrom, shrinkFrom - QPointF(12 * direction.x(), 24 * direction.y()), Qt::ShiftModifier);
+            QVERIFY(rect().width() < larger.width() && rect().height() < larger.height());
+            QVERIFY(aspectError() <= qMax(sourceSize.width(), sourceSize.height()));
+            QVERIFY(QLineF(cornerPoint(rect(), corner ^ 3), anchor).length() <= 1);
+        }
+        const auto file = dir.path() + "/image-resized.json"; w.theme.save(file);
+        Renderer reference;
+        QCOMPARE(reference.render(Theme::load(file), w.sample), w.renderer.render(w.theme, w.sample));
+        w.mutate([&](Theme &t) { auto a = t.layers(); updateLayer(a, id, [](QJsonObject &o) { o["locked"] = true; }); t.data["layers"] = a; });
+        const auto locked = w.theme.data;
+        const auto handle = rect().bottomRight();
+        dragCanvas(*w.canvas, handle, handle + QPointF(24, 24), Qt::ShiftModifier);
+        QCOMPARE(w.theme.data, locked);
+    }
+    void imageToolbarCreatesAComponentAndCancelKeepsTheTool() {
+        TestProfile dir;
+        const auto restore = qScopeGuard([&] { UiAppearance::instance().apply("system", dir.path()); });
+        MainWindow w(dir.path());
+        const auto close = qScopeGuard([&] { w.dirty = false; w.quitting = true; });
+        w.sampling.stop(); w.setEditing(true); w.show();
+        w.theme.data["layers"] = QJsonArray{};
+        w.theme.data.remove("background");
+        w.theme.data["background_color"] = rgba(Qt::black);
+        w.render(); w.buildTree();
+        w.undoHistory.clear(); w.redoHistory.clear();
+        auto image = w.findChild<QAction *>("editorTool_image");
+        QVERIFY(image && image->isEnabled() && !image->icon().isNull());
+        QVERIFY(!image->isCheckable());
+        const bool nativeDialogsDisabled = qApp->testAttribute(Qt::AA_DontUseNativeDialogs);
+        qApp->setAttribute(Qt::AA_DontUseNativeDialogs, true);
+        const auto restoreDialogs = qScopeGuard([&] { qApp->setAttribute(Qt::AA_DontUseNativeDialogs, nativeDialogsDisabled); });
+        w.findChild<QAction *>("editorTool_rectangle")->trigger();
+        const auto original = w.theme.data;
+        const auto originalFrame = w.frame;
+        QTimer::singleShot(0, &w, [&] {
+            auto dialog = w.findChild<QFileDialog *>();
+            QVERIFY(dialog);
+            dialog->reject();
+        });
+        image->trigger();
+        QCOMPARE(w.theme.data, original);
+        QCOMPARE(w.canvas->tool, QString("rectangle"));
+        QImage picture(120, 80, QImage::Format_RGB32);
+        picture.fill(QColor("#ff5500"));
+        const auto file = dir.path() + "/picture.png";
+        QVERIFY(picture.save(file));
+        QTimer::singleShot(0, &w, [&] {
+            auto dialog = w.findChild<QFileDialog *>();
+            QVERIFY(dialog);
+            dialog->selectFile(file);
+            QVERIFY(QMetaObject::invokeMethod(dialog, "accept"));
+        });
+        image->trigger();
+        QCOMPARE(w.selection().size(), 1);
+        const auto id = w.selection().first();
+        const auto component = findLayer(w.theme.layers(), id);
+        QCOMPARE(component["kind"].toString(), QString("image"));
+        QVERIFY(!component["data"].toString().isEmpty());
+        QVERIFY(!w.theme.data.contains("background"));
+        const auto bounds = layerBounds(component).translated(absolutePosition(w.theme.layers(), id));
+        QVERIFY(QRectF(QPointF(), w.theme.size()).contains(bounds));
+        QCOMPARE(w.canvas->tool, QString("move"));
+        QVERIFY(w.findChild<QAction *>("editorTool_move")->isChecked());
+        QCOMPARE(w.frame.pixelColor(200, 160), QColor("#ff5500"));
+        const auto inserted = w.frame;
+        w.undo(); QCOMPARE(w.frame, originalFrame);
+        w.redo(); QCOMPARE(w.frame, inserted);
+        const auto shots = qEnvironmentVariable("TURING_IMAGE_UI_SHOTS");
+        if (!shots.isEmpty()) {
+            w.selectUiTheme("catppuccin-macchiato");
+            QDir().mkpath(shots);
+            w.grab().save(shots + "/image-component.png");
+            w.findChild<QToolBar *>("editorTools")->grab().save(shots + "/left-tools.png");
+        }
+    }
+    void componentCutPasteHonorsLocksAndUndo() {
+        TestProfile dir;
+        MainWindow w(dir.path());
+        const auto close = qScopeGuard([&] { w.dirty = false; w.quitting = true; });
+        w.sampling.stop(); w.setEditing(true); w.show();
+        auto line = newLayer("line", "Diagonal");
+        setLayerLine(line, QLineF(10, 80, 70, 10));
+        const auto child = line["id"].toString();
+        auto group = newLayer("group", "Component");
+        group["x"] = 40; group["y"] = 30;
+        group["children"] = QJsonArray{line};
+        const auto id = group["id"].toString();
+        auto locked = newLayer("rectangle", "Locked");
+        locked["locked"] = true;
+        const auto lockedId = locked["id"].toString();
+        w.theme.data["layers"] = QJsonArray{group, locked};
+        w.render(); w.selection({id, child, lockedId});
+        w.undoHistory.clear(); w.redoHistory.clear();
+        const auto original = w.theme.data;
+        QVERIFY(w.layerActions["cut"]->isEnabled());
+        QAction *cutShortcut = nullptr;
+        for (auto action : w.findChildren<QAction *>("shortcut"))
+            if (action->shortcut() == QKeySequence(QKeySequence::Cut)) cutShortcut = action;
+        QVERIFY(cutShortcut);
+        w.canvas->setFocus(); cutShortcut->trigger();
+        QVERIFY(findLayer(w.theme.layers(), id).isEmpty());
+        QVERIFY(!findLayer(w.theme.layers(), lockedId).isEmpty());
+        QCOMPARE(w.clipboard.size(), 1); // Parent/child selection must not duplicate the child.
+        QVERIFY(w.clipboardCut);
+        const auto cutState = w.theme.data;
+        w.undo(); QCOMPARE(w.theme.data, original);
+        w.redo(); QCOMPARE(w.theme.data, cutState);
+        w.layerActions["paste"]->trigger();
+        QCOMPARE(w.selection().size(), 1);
+        const auto pastedId = w.selection().first();
+        QVERIFY(pastedId != id);
+        auto pasted = findLayer(w.theme.layers(), pastedId);
+        QCOMPARE(pasted["name"].toString(), QString("Component"));
+        QCOMPARE(absolutePosition(w.theme.layers(), pastedId), QPointF(40, 30));
+        const auto pastedLine = pasted["children"].toArray().first().toObject();
+        QVERIFY(pastedLine["id"] != line["id"]);
+        QCOMPARE(layerLine(pastedLine), layerLine(line));
+        QVERIFY(!w.clipboardCut);
+        const auto pastedState = w.theme.data;
+        w.undo(); QCOMPARE(w.theme.data, cutState);
+        w.redo(); QCOMPARE(w.theme.data, pastedState);
+        w.selection({lockedId});
+        QVERIFY(!w.layerActions["cut"]->isEnabled());
+        const auto clipboard = w.clipboard;
+        w.layerAction("cut");
+        QCOMPARE(w.theme.data, pastedState);
+        QCOMPARE(w.clipboard, clipboard);
+        w.layerActions["copy"]->trigger(); // Locked objects can still be copied.
+        const auto copied = w.clipboard;
+        w.selection({pastedId});
+        w.layerAction("duplicate");
+        QCOMPARE(w.clipboard, copied); // Ctrl+J must not replace the clipboard.
+        QVERIFY(w.selection().first() != pastedId);
+        QCOMPARE(absolutePosition(w.theme.layers(), w.selection().first()), QPointF(48, 38));
+    }
+    void componentActionsUseExplorerOrder_data() {
+        QTest::addColumn<bool>("english");
+        QTest::newRow("chinese") << false;
+        QTest::newRow("english") << true;
+    }
+    void componentActionsUseExplorerOrder() {
+        QFETCH(bool, english);
+        TestProfile dir;
+        const auto restore = qScopeGuard([&] { UiAppearance::instance().apply("system", dir.path()); });
+        MainWindow w(dir.path());
+        const auto close = qScopeGuard([&] { w.dirty = false; w.quitting = true; });
+        w.sampling.stop(); w.english = english; w.build();
+        w.setEditing(true); w.show();
+        w.selectUiTheme("catppuccin-macchiato");
+        const auto caption = [&](QAction *action) { return action->text().section('\t', 0, 0); };
+        QCOMPARE(caption(w.layerActions["copy"]), english ? QString("Copy") : QString::fromUtf8("复制"));
+        QCOMPARE(caption(w.layerActions["delete"]), english ? QString("Delete") : QString::fromUtf8("删除"));
+        QCOMPARE(caption(w.layerActions["rename"]), english ? QString("Rename") : QString::fromUtf8("重命名"));
+        QCOMPARE(caption(w.layerActions["properties"]), english ? QString("Properties") : QString::fromUtf8("属性"));
+        auto footer = w.findChild<QToolBar *>("layerTools");
+        auto create = w.findChild<QToolButton *>("layerNew");
+        QVERIFY(footer && create && create->menu());
+        QCOMPARE(footer->widgetForAction(footer->actions().first()), create);
+        QCOMPARE(create->text(), english ? QString("New") : QString::fromUtf8("新建"));
+        QVERIFY(!footer->actions().contains(w.layerActions["duplicate"]));
+        // Use the actual New menu to create an object before testing its actions.
+        QAction *newRectangle = nullptr;
+        for (auto action : create->menu()->actions()) if (action->data() == "rectangle") newRectangle = action;
+        QVERIFY(newRectangle); newRectangle->trigger();
+        const auto id = w.selection().first();
+        w.layerActions["rename"]->trigger();
+        QCoreApplication::processEvents();
+        QLineEdit *editor = nullptr;
+        for (auto field : w.tree->findChildren<QLineEdit *>()) if (field->isVisible()) editor = field;
+        QVERIFY(editor && !QApplication::activeModalWidget());
+        editor->setText("Renamed"); QTest::keyClick(editor, Qt::Key_Return);
+        QCoreApplication::processEvents();
+        QCOMPARE(findLayer(w.theme.layers(), id)["name"].toString(), QString("Renamed"));
+        w.layerActions["properties"]->trigger();
+        QCOMPARE(w.inspectorTabs->currentIndex(), 1);
+        w.inspectorTabs->setCurrentIndex(0);
+        bool inspected = false;
+        const auto shots = qEnvironmentVariable("TURING_COMPONENT_UI_SHOTS");
+        QTimer::singleShot(0, &w, [&] {
+            auto menu = w.findChild<QMenu *>("layerContextMenu");
+            QVERIFY(menu);
+            const auto closeMenu = qScopeGuard([&] { menu->close(); });
+            QStringList order;
+            for (auto action : menu->actions()) {
+                if (action->isSeparator()) order.append("|");
+                else if (action->menu()) order.append(action->menu()->objectName() == "layerArrangeMenu" ? "arrange" : "new");
+                else order.append(action->objectName().mid(6));
+            }
+            QCOMPARE(order, QStringList({"cut", "copy", "paste", "|", "delete", "rename", "|", "group", "ungroup",
+                "arrange", "|", "new", "|", "properties"}));
+            auto newMenu = menu->findChild<QMenu *>("layerContextNewMenu");
+            QVERIFY(newMenu && newMenu->actions().size() == create->menu()->actions().size());
+            QCOMPARE(newMenu->title(), create->text());
+            if (!shots.isEmpty()) {
+                QDir().mkpath(shots);
+                menu->grab().save(shots + (english ? "/menu-english.png" : "/menu-chinese.png"));
+                footer->grab().save(shots + (english ? "/toolbar-english.png" : "/toolbar-chinese.png"));
+            }
+            inspected = true;
+        });
+        w.contextMenu(w.tree->viewport()->mapToGlobal(QPoint(20, 80)));
+        QVERIFY(inspected);
     }
     void trayMenuUsesNativeWindowsItems() {
 #ifdef Q_OS_WIN

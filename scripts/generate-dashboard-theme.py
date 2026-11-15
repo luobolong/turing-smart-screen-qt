@@ -63,10 +63,8 @@ def panel(key, x, y, h, children):
     return group(key, x, y, [background, *children])
 
 
-system_logo = icon("system-logo", None, 8, HEADER_BASELINE - 15, "system", size=48, metric="OsIcon")
-system_logo["align"] = "right"
 system = group("SYSTEM", 12, 15, [
-    system_logo,
+    icon("system-logo", None, 0, HEADER_BASELINE - 15, "system", size=48, metric="OsIcon"),
     text("system-version", "", 56, 20, 98, 15, "muted", metric="OsName", shrink_to_fit=True),
     text("system-kernel", "", 56, HEADER_BASELINE - 15, 110, 12, "muted", metric="KernelVersion",
          shrink_to_fit=True),

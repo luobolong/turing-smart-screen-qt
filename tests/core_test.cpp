@@ -104,6 +104,52 @@ private slots:
         theme.data["landscape"] = false;
         QCOMPARE(renderer.render(theme, sample), reference.renderFull(theme, sample));
     }
+    void borderedSensorsStayTransparentDuringPartialUpdates_data() {
+        QTest::addColumn<bool>("fixedFont");
+        QTest::newRow("aligned-text") << false;
+        QTest::newRow("official-fixed-font") << true;
+    }
+    void borderedSensorsStayTransparentDuringPartialUpdates() {
+        QFETCH(bool, fixedFont);
+        auto theme = Theme::starter();
+        theme.data["background_color"] = rgba(Qt::black);
+        auto bar = newLayer("bar", "Under the sensor", "CpuLoad");
+        bar["x"] = 40; bar["y"] = 90; bar["w"] = 240; bar["h"] = 35;
+        auto sensor = newLayer("sensor", "Box", "RamLoad");
+        sensor["x"] = 60; sensor["y"] = 60; sensor["w"] = 160; sensor["h"] = 80;
+        sensor["fill_enabled"] = true; sensor["fill"] = rgba(QColor(20, 40, 60, 190));
+        sensor["stroke_enabled"] = true; sensor["stroke_width"] = 6; sensor["stroke"] = rgba(Qt::magenta);
+        if (fixedFont) {
+            sensor["font"] = QJsonObject{{"family", "GeForce"}, {"size", 20}, {"width", 10}, {"height", 20},
+                {"spacing", 10}, {"color", rgba(Qt::white)}};
+            sensor["long_text"] = false;
+        } else sensor["align"] = "left";
+        auto group = newLayer("group", "Offset group");
+        group["x"] = 12; group["y"] = 16; group["children"] = QJsonArray{bar, sensor};
+        theme.data["layers"] = QJsonArray{group};
+        Snapshot sample;
+        sample.values["RamLoad"] = 50;
+        Renderer incremental, reference;
+        for (double value : {0., 100., 10., 75.}) {
+            sample.values["CpuLoad"] = value; // Repaint below the sensor's glyphs.
+            const auto frame = incremental.render(theme, sample);
+            QCOMPARE(frame, reference.renderFull(theme, sample));
+            QCOMPARE(frame.pixelColor(70, 116), QColor(Qt::magenta));
+            QCOMPARE(frame.pixelColor(210, 150), QColor(Qt::black)); // Old fill settings are ignored.
+            sample.values["RamLoad"] = value;
+            QCOMPARE(incremental.render(theme, sample), reference.renderFull(theme, sample));
+        }
+        QTemporaryDir dir;
+        theme.save(dir.path() + "/box.json");
+        QCOMPARE(reference.renderFull(Theme::load(dir.path() + "/box.json"), sample), incremental.render(theme, sample));
+        // The unused defaults in old text objects must not introduce a box.
+        sensor.remove("fill_enabled"); sensor.remove("stroke_enabled");
+        theme.data["layers"] = QJsonArray{sensor};
+        const auto legacy = reference.renderFull(theme, sample);
+        sensor["fill"] = rgba(Qt::transparent); sensor["stroke_width"] = 0;
+        theme.data["layers"] = QJsonArray{sensor};
+        QCOMPARE(reference.renderFull(theme, sample), legacy);
+    }
     void collectorRequestsOnlyConsumedMetrics() {
         Collector collector;
         const QSet<QString> clock{"Time"};

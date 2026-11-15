@@ -2,6 +2,7 @@
 #include <QColor>
 #include <QJsonArray>
 #include <QJsonObject>
+#include <QLineF>
 #include <QRectF>
 #include <QStringList>
 #include <functional>
@@ -9,6 +10,8 @@ namespace Screen {
 QString assets();
 QJsonArray rgba(QColor c);
 QColor color(QJsonValue value, QColor fallback = Qt::white);
+QColor layerFillColor(const QJsonObject &layer);
+int layerStrokeWidth(const QJsonObject &layer);
 QString uid();
 struct Theme {
     QJsonObject data;
@@ -39,6 +42,8 @@ QString parentOf(const QJsonArray &layers, const QString &id);
 QStringList normalizedSelection(const QJsonArray &layers, const QStringList &ids);
 QPointF absolutePosition(const QJsonArray &layers, const QString &id, QPointF offset = {});
 QRectF layerBounds(const QJsonObject &layer);
+QLineF layerLine(const QJsonObject &layer);
+void setLayerLine(QJsonObject &layer, const QLineF &line);
 bool layerLocked(const QJsonArray &layers, const QString &id, bool inherited = false);
 QJsonObject newLayer(const QString &kind, const QString &name, const QString &metric = {});
 QJsonObject component(const QString &kind);

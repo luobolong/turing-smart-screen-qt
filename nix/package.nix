@@ -13,7 +13,7 @@
 
 stdenv.mkDerivation {
   pname = "turing-screen";
-  version = "0.2.2";
+  version = "0.2.3";
 
   src = lib.cleanSourceWith {
     src = ../.;

@@ -33,6 +33,7 @@ You can preview and edit themes without a connected display.
 ## Features
 
 - **Themes**: Supports official `.data` themes and JSON themes. Double-click a theme to open the editor, where you can adjust text, images, layers, progress bars, and metric bindings. Undo, redo, and PNG export are supported. Edited official themes are saved as JSON.
+- **Images and component properties**: Use **Theme options** to set or clear a background image or export a PNG, and the image tool on the left to insert an image component. Hold Shift while dragging an image corner to scale at its original aspect ratio. Properties shows supported controls with live numeric updates and color swatches. Lines support width and color; text and sensors support outer borders; rectangles and ellipses also support fills.
 - **Zoom**: The preview and editor provide fit-to-window, 1:1, a slider, and percentage input in the bottom-right corner. You can also zoom with Ctrl + mouse wheel.
 - **Data collection**: Updates once per second by default; the interval is configurable in Settings. Turning off **Collect data** pauses updates and keeps the last frame. The switches in Settings, the device panel, and the tray menu stay in sync.
 - **Lightweight mode**: Releases the editor interface and static drawing caches while continuing to update the connected display. Click the tray icon to restore the window, or choose **Exit** from the tray menu to exit.

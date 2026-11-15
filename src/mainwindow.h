@@ -32,6 +32,8 @@ class QSplitter;
 class QToolBar;
 class QAction;
 class QMenu;
+class QHBoxLayout;
+class QFormLayout;
 namespace Screen {
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -88,6 +90,7 @@ private:
     QHash<QString, Document> drafts;
     QList<QJsonObject> undoHistory, redoHistory;
     QJsonArray clipboard;
+    bool clipboardCut = false;
     Renderer &renderer;
     QCache<QString, QPixmap> thumbnailCache{2 * 1024 * 1024};
     Collector &collector;
@@ -121,6 +124,13 @@ private:
     QLineEdit *layerName = nullptr, *layerText = nullptr;
     QSpinBox *xBox = nullptr, *yBox = nullptr, *wBox = nullptr, *hBox = nullptr, *fontBox = nullptr;
     QCheckBox *visibleBox = nullptr, *lockedBox = nullptr, *mirrorBox = nullptr;
+    QWidget *strokeOptions = nullptr, *fontOptions = nullptr, *fillOptions = nullptr;
+    QFormLayout *propertyForm = nullptr;
+    QHBoxLayout *dimensionsRow = nullptr;
+    QCheckBox *strokeEnabledBox = nullptr;
+    QSpinBox *strokeWidthBox = nullptr;
+    QLabel *strokeWidthLabel = nullptr;
+    QPushButton *strokeColor = nullptr;
     std::unique_ptr<StartupController> startup;
     QCheckBox *startupToggle = nullptr;
     QLabel *startupStatus = nullptr;
@@ -145,6 +155,7 @@ private:
     void buildSettings(QWidget *page);
     QCheckBox *collectionToggle(const QString &name);
     QWidget *zoomControls(Canvas *target, const QString &prefix);
+    QLabel *themeHeading(QHBoxLayout *layout, const QString &name, const QString &buttonName);
     void reloadUiThemes();
     void selectUiTheme(const QString &id);
     void createUiTheme();
@@ -179,7 +190,9 @@ private:
     void buildTree();
     void selectTree();
     void properties();
+    void alignPropertyColors();
     void propertyEdited();
+    void strokeEdited();
     void thumbnails();
     void setPage(int index);
     void setEditing(bool value);
@@ -189,6 +202,7 @@ private:
     void saveTheme(bool as = false);
     void exportImage();
     void backgroundImage();
+    bool setThemeBackground(const QString &file, QString &error);
     void createLayer(const QString &kind, QPointF point = {24, 24}, QSizeF size = {100, 30});
     void addComponent(const QString &kind);
     void layerAction(const QString &action);

@@ -37,14 +37,20 @@ protected:
 private:
     QImage frame;
     double scale = 1;
-    bool fit = true, dragging = false, resizing = false, marquee = false;
+    bool fit = false, dragging = false, resizing = false, marquee = false, drawingLine = false;
+    int lineEndpoint = -1;
+    int resizeCorner = -1;
+    QSize imageOriginalSize;
+    QLineF selectionLine;
     QPointF start, last;
     QJsonObject before;
     QRectF selectionBox;
     QString hit(const QJsonArray &, QPointF p, bool deep = false, QPointF offset = {}) const;
     QString dragTarget(QPointF point, bool deep) const;
     bool canResize() const;
+    int resizeHandle(QPointF point) const;
     QPointF logical(QPointF p) const;
     QRectF bounds(const QString &id) const;
+    QLineF screenLine(const QString &id) const;
 };
 } // namespace Screen

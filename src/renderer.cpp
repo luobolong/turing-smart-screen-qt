@@ -5,6 +5,7 @@
 #include <QImageReader>
 #include <QJsonDocument>
 #include <QRegion>
+#include <QPainterPath>
 #include <cmath>
 #include <cstring>
 #include <stdexcept>
@@ -255,15 +256,16 @@ QRect Renderer::nodeBounds(const PaintNode &node, const Snapshot &sample, QSize 
     const auto at = node.offset + QPoint(layer["x"].toInt(), layer["y"].toInt());
     const auto screen = QRect(QPoint(), size);
     const auto kind = layer["kind"].toString();
+    const bool decoratedText = kind == "sensor" && layerStrokeWidth(layer) > 0;
     if (kind == "bar")
         return QRect(at, QSize(qBound(1, layer["w"].toInt(160), 1536), qBound(1, layer["h"].toInt(10), 1536)))
             .adjusted(-1, -1, 1, 1).intersected(screen);
-    if (kind == "sensor" && (layer.contains("align") || layer.contains("valign") || layer.contains("baseline") ||
+    if (kind == "sensor" && !decoratedText && (layer.contains("align") || layer.contains("valign") || layer.contains("baseline") ||
         layer["fit"].toBool() || layer["shrink_to_fit"].toBool() || layer["clip"].toBool() ||
         layer["elide"].toBool() || layer["wrap"].toBool()) && layer["w"].toInt() > 0)
         return QRect(at, QSize(layer["w"].toInt(), qMax(1, layer["h"].toInt()))).intersected(screen);
     const auto font = layer["font"].toObject();
-    if (kind == "sensor" && !layer["long_text"].toBool(true) && font["width"].toInt() > 0 && font["height"].toInt() > 0) {
+    if (kind == "sensor" && !decoratedText && !layer["long_text"].toBool(true) && font["width"].toInt() > 0 && font["height"].toInt() > 0) {
         const auto text = sensorText(layer, sample);
         bool ascii = true;
         for (auto ch : text) ascii &= ch.unicode() >= 32 && ch.unicode() < 127;
@@ -398,6 +400,27 @@ QJsonArray Renderer::layoutChildren(const QJsonObject &group, const Snapshot &sa
     }
     return children;
 }
+static void paintBox(QImage &out, const QRect &clip, QRectF rect, QColor fill, int stroke, QColor strokeColor,
+                     bool ellipse = false, double radius = 0) {
+    const auto path = [&](QRectF bounds, double corner) {
+        QPainterPath result;
+        if (ellipse) result.addEllipse(bounds);
+        else if (corner > 0) result.addRoundedRect(bounds, corner, corner);
+        else result.addRect(bounds);
+        return result;
+    };
+    QPainter painter(&out);
+    painter.setClipRect(clip);
+    painter.setRenderHint(QPainter::Antialiasing);
+    const auto inside = path(rect, radius);
+    if (fill.alpha() > 0) painter.fillPath(inside, fill);
+    if (stroke > 0 && strokeColor.alpha() > 0) {
+        auto border = path(rect.adjusted(-stroke, -stroke, stroke, stroke), radius > 0 ? radius + stroke : 0);
+        border.setFillRule(Qt::OddEvenFill);
+        border.addPath(inside);
+        painter.fillPath(border, strokeColor);
+    }
+}
 void Renderer::layers(QImage &out, const QJsonArray &a, const Snapshot &s, QPoint offset, bool example) {
     for (auto v : a) {
         auto l = v.toObject();
@@ -415,6 +438,7 @@ void Renderer::layers(QImage &out, const QJsonArray &a, const Snapshot &s, QPoin
         else if (kind == "arc")
             arc(out, l, at, s, example);
         else if (kind == "text" || kind == "sensor") {
+            const QRect box(at, QSize(qMax(1, l["w"].toInt(120)), qMax(1, l["h"].toInt(30))));
             const auto txt = layerText(l, s, example);
             auto font = l["font"].toObject();
             if (l.contains("align") || l.contains("valign") || l.contains("baseline") || l["fit"].toBool() ||
@@ -431,6 +455,8 @@ void Renderer::layers(QImage &out, const QJsonArray &a, const Snapshot &s, QPoin
                 font["_shrink_to_fit"] = l["shrink_to_fit"];
             }
             text(out, txt, at, font, l["long_text"].toBool(true));
+            const int stroke = layerStrokeWidth(l);
+            if (stroke > 0) paintBox(out, paintClip, box, Qt::transparent, stroke, color(l["stroke"]));
         } else if (kind == "image") {
             auto img = decode(l["data"].toString());
             if (!img.isNull()) {
@@ -448,22 +474,15 @@ void Renderer::layers(QImage &out, const QJsonArray &a, const Snapshot &s, QPoin
                 image(out, img, at, paintClip);
             }
         } else {
-            QPainter p(&out);
-            p.setClipRect(paintClip);
-            p.setRenderHint(QPainter::Antialiasing);
-            p.setBrush(color(l["fill"], QColor("#28c9bf")));
-            int sw = l["stroke_width"].toInt(1);
-            p.setPen(sw > 0 ? QPen(color(l["stroke"]), sw) : QPen(Qt::NoPen));
+            int sw = layerStrokeWidth(l);
             QRectF r(at, QSizeF(l["w"].toDouble(100), l["h"].toDouble(30)));
-            if (kind == "ellipse")
-                p.drawEllipse(r);
-            else if (kind == "line")
-                p.drawLine(r.topLeft(), r.bottomRight());
-            else if (kind == "rectangle" && l["corner_radius"].toDouble() > 0)
-                p.drawRoundedRect(r.adjusted(sw / 2., sw / 2., -sw / 2., -sw / 2.),
-                                  l["corner_radius"].toDouble(), l["corner_radius"].toDouble());
-            else
-                p.drawRect(r.adjusted(sw / 2., sw / 2., -sw / 2., -sw / 2.));
+            if (kind == "line") {
+                QPainter p(&out);
+                p.setClipRect(paintClip);
+                p.setRenderHint(QPainter::Antialiasing);
+                p.setPen(sw > 0 ? QPen(color(l["stroke"]), sw) : QPen(Qt::NoPen));
+                p.drawLine(layerLine(l).translated(at));
+            } else paintBox(out, paintClip, r, layerFillColor(l), sw, color(l["stroke"]), kind == "ellipse", l["corner_radius"].toDouble());
         }
     }
 }

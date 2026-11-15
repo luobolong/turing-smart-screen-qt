@@ -19,7 +19,7 @@ struct UiTheme {
 QVector<UiTheme> uiThemes(const QString &dataDir);
 UiTheme loadUiTheme(const QString &id, const QString &dataDir);
 enum class UiIcon { Preview, Edit, Sensors, Settings, Lightweight, Undo, Redo, Search, Add, Locate, Expand, Collapse, Hide, SidebarExpand, SidebarCollapse, Import, Refresh,
-                    Move, Text, Rectangle, Ellipse, Line, Layers, Components, Group, Ungroup, Copy, Paste, Duplicate, Delete };
+                    Move, Text, Image, Rectangle, Ellipse, Line, Layers, Components, Group, Ungroup, Cut, Copy, Paste, Duplicate, Delete };
 QIcon uiIcon(UiIcon icon);
 QIcon applicationIcon();
 class UiAppearance : public QObject {

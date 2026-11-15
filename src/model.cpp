@@ -31,6 +31,19 @@ QColor color(QJsonValue v, QColor fallback) {
     return a.size() >= 3 ? QColor(a[0].toInt(), a[1].toInt(), a[2].toInt(), a.size() > 3 ? a[3].toInt() : 255)
                          : fallback;
 }
+QColor layerFillColor(const QJsonObject &layer) {
+    const auto kind = layer["kind"].toString();
+    if (kind == "text" || kind == "sensor")
+        return Qt::transparent;
+    return color(layer[kind == "bar" || kind == "arc" ? "front" : "fill"], QColor("#28c9bf"));
+}
+int layerStrokeWidth(const QJsonObject &layer) {
+    const auto kind = layer["kind"].toString();
+    const bool text = kind == "text" || kind == "sensor";
+    if (!text && kind != "rectangle" && kind != "ellipse" && kind != "line") return 0;
+    if ((text || kind == "rectangle" || kind == "ellipse") && !layer["stroke_enabled"].toBool(!text)) return 0;
+    return qMax(0, layer["stroke_width"].toInt(1));
+}
 static QJsonObject base(const QString &kind, const QString &name) {
     return {{"id", uid()}, {"kind", kind}, {"name", name},    {"x", 0},         {"y", 0},
             {"w", 100},    {"h", 30},      {"visible", true}, {"locked", false}};
@@ -44,6 +57,8 @@ QJsonObject newLayer(const QString &kind, const QString &name, const QString &me
     o["stroke"] = rgba(QColor("#66d9df"));
     o["stroke_width"] = 1;
     if (kind == "text" || kind == "sensor") {
+        o.remove("fill");
+        o["stroke_enabled"] = false;
         o["text"] = kind == "text" ? name : QString();
         o["font"] =
             QJsonObject{{"family", "Noto Sans SC"}, {"size", 20}, {"color", rgba(Qt::white)}, {"spacing", 0}};
@@ -511,6 +526,19 @@ QPointF absolutePosition(const QJsonArray &a, const QString &id, QPointF offset)
             return absolutePosition(o["children"].toArray(), id, p);
     }
     return {};
+}
+QLineF layerLine(const QJsonObject &layer) {
+    const double width = qMax(0., layer["w"].toDouble(100)), height = qMax(0., layer["h"].toDouble(30));
+    return layer["line_rising"].toBool() ? QLineF(0, height, width, 0) : QLineF(0, 0, width, height);
+}
+void setLayerLine(QJsonObject &layer, const QLineF &line) {
+    const auto start = line.p1().toPoint(), end = line.p2().toPoint();
+    layer["x"] = qMin(start.x(), end.x());
+    layer["y"] = qMin(start.y(), end.y());
+    layer["w"] = qAbs(end.x() - start.x());
+    layer["h"] = qAbs(end.y() - start.y());
+    layer["line_rising"] = (start.x() < end.x() && start.y() > end.y()) ||
+        (start.x() > end.x() && start.y() < end.y());
 }
 QRectF layerBounds(const QJsonObject &o) {
     if (o["kind"] == "group") {
